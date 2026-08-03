@@ -1,0 +1,13 @@
+[Unit]
+Description=Agent1 daily shadow ingest (D-2 / позавчера)
+After=network-online.target agent1-api.service postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=admin-akea
+WorkingDirectory=/home/admin-akea/agent1
+EnvironmentFile=/home/admin-akea/agent1/.env
+Environment=PATH=/home/admin-akea/agent1/venv/bin:/usr/bin
+# Позавчера (Samara/Yekaterinburg): фото и Wialon уже догружены
+ExecStart=/bin/bash -lc 'DAY=$(TZ=Asia/Yekaterinburg date -d "2 days ago" +%%F); curl -sS -X POST "http://127.0.0.1:8101/api/ingest/day/${DAY}?enqueue=true"'

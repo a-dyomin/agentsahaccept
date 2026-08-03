@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily timer for Agent1 shadow ingest
+
+[Timer]
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+Unit=agent1-daily.service
+
+[Install]
+WantedBy=timers.target

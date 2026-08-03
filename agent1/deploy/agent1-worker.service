@@ -1,0 +1,19 @@
+[Unit]
+Description=Agent1 shadow worker
+After=network.target agent1-api.service
+Requires=agent1-api.service
+
+[Service]
+Type=simple
+User=admin-akea
+WorkingDirectory=/home/admin-akea/agent1/app
+Environment=AGENT1_HOME=/home/admin-akea/agent1
+Environment=AGENT1_API=http://127.0.0.1:8101
+Environment=AGENT1_WORKER_ID=worker-1
+Environment=PATH=/home/admin-akea/agent1/venv/bin:/usr/bin
+ExecStart=/home/admin-akea/agent1/venv/bin/python worker.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

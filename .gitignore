@@ -1,0 +1,18 @@
+# Local secrets — never commit
+.env
+.env.local
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+outputs/
+data/cache/
+data/photos/
+agent1/.env.local
+agent1/data/
+
+tz-repo/
+agent1/_remote_snap/
+agent1/deploy/tmp_*
+
