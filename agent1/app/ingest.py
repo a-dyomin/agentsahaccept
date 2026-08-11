@@ -24,6 +24,10 @@ GRETA_EXPORT_SCRIPT = os.environ.get(
     "GRETA_EXPORT_SCRIPT",
     "/home/gretaadmin/agent1_export/export_day.rb",
 )
+GRETA_SCHEDULES_SCRIPT = os.environ.get(
+    "GRETA_SCHEDULES_SCRIPT",
+    "/home/gretaadmin/agent1_export/export_schedules_day.rb",
+)
 GRETA_BACKEND = os.environ.get(
     "GRETA_BACKEND", "/home/gretaadmin/greta-backend/current"
 )
@@ -34,15 +38,13 @@ def ensure_schema() -> None:
         conn.execute(SCHEMA_V2)
 
 
-def pull_day_json(day: str, limit: int | None = None) -> dict[str, Any]:
-    """SSH to Greta and run rails exporter; return parsed JSON."""
-    lim = limit if limit is not None else os.environ.get("GRETA_EXPORT_LIMIT")
-    lim_arg = f" {int(lim)}" if lim not in (None, "", "0") else ""
+def _ssh_rails_runner(script: str, day: str, extra_args: str = "", timeout: int = 60 * 45) -> dict[str, Any]:
+    """SSH to Greta, run rails runner script for day, return parsed JSON."""
     remote = (
         f"cd {GRETA_BACKEND} && "
         f"export PATH=$HOME/.rbenv/bin:$HOME/.rbenv/shims:$PATH && "
         f'eval "$(rbenv init -)" && '
-        f"RAILS_ENV=production bundle exec rails runner {GRETA_EXPORT_SCRIPT} {day}{lim_arg}"
+        f"RAILS_ENV=production bundle exec rails runner {script} {day}{extra_args}"
     )
     cmd = [
         "ssh",
@@ -59,7 +61,6 @@ def pull_day_json(day: str, limit: int | None = None) -> dict[str, Any]:
         f"{GRETA_SSH_USER}@{GRETA_SSH_HOST}",
         remote,
     ]
-    # write to temp file to avoid huge memory spikes in pipe buffering issues
     with tempfile.NamedTemporaryFile(prefix="greta_day_", suffix=".json", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
@@ -68,14 +69,13 @@ def pull_day_json(day: str, limit: int | None = None) -> dict[str, Any]:
                 cmd,
                 stdout=out,
                 stderr=subprocess.PIPE,
-                timeout=60 * 45,
+                timeout=timeout,
                 check=False,
             )
         if proc.returncode != 0:
             err = proc.stderr.decode("utf-8", "replace")[-2000:]
             raise RuntimeError(f"greta export failed rc={proc.returncode}: {err}")
         raw = tmp_path.read_text(encoding="utf-8")
-        # rails may print warnings before JSON — find first {
         i = raw.find("{")
         if i < 0:
             raise RuntimeError("no JSON in greta export output")
@@ -84,10 +84,82 @@ def pull_day_json(day: str, limit: int | None = None) -> dict[str, Any]:
         tmp_path.unlink(missing_ok=True)
 
 
+def pull_day_json(day: str, limit: int | None = None) -> dict[str, Any]:
+    """SSH to Greta and run rails exporter; return parsed JSON."""
+    lim = limit if limit is not None else os.environ.get("GRETA_EXPORT_LIMIT")
+    lim_arg = f" {int(lim)}" if lim not in (None, "", "0") else ""
+    return _ssh_rails_runner(GRETA_EXPORT_SCRIPT, day, lim_arg, timeout=60 * 45)
+
+
+def pull_schedules_json(day: str) -> dict[str, Any]:
+    """Light Greta export: schedules + photo.schedule_id (no Wialon)."""
+    return _ssh_rails_runner(GRETA_SCHEDULES_SCRIPT, day, timeout=60 * 10)
+
+
+def _persist_schedules(conn: Any, day: str, schedules: list[dict[str, Any]]) -> int:
+    conn.execute("DELETE FROM schedules_day WHERE day=%s::date", (day,))
+    if not schedules:
+        return 0
+    n = 0
+    for s in schedules:
+        sid = s.get("id") if s.get("id") is not None else s.get("schedule_id")
+        if sid is None:
+            continue
+        conn.execute(
+            """
+            INSERT INTO schedules_day(
+              day, schedule_id, vehicle_id, plate, driver_id, state,
+              start_at, finish_at, started_at, finished_at,
+              route_id, scope_type, change_source, mileage, provider_id, raw
+            ) VALUES (
+              %s::date,%s,%s,%s,%s,%s,
+              %s,%s,%s,%s,
+              %s,%s,%s,%s,%s,%s::jsonb
+            )
+            ON CONFLICT (day, schedule_id) DO UPDATE SET
+              vehicle_id=EXCLUDED.vehicle_id,
+              plate=EXCLUDED.plate,
+              driver_id=EXCLUDED.driver_id,
+              state=EXCLUDED.state,
+              start_at=EXCLUDED.start_at,
+              finish_at=EXCLUDED.finish_at,
+              started_at=EXCLUDED.started_at,
+              finished_at=EXCLUDED.finished_at,
+              route_id=EXCLUDED.route_id,
+              scope_type=EXCLUDED.scope_type,
+              change_source=EXCLUDED.change_source,
+              mileage=EXCLUDED.mileage,
+              provider_id=EXCLUDED.provider_id,
+              raw=EXCLUDED.raw
+            """,
+            (
+                day,
+                sid,
+                s.get("vehicle_id"),
+                s.get("plate"),
+                s.get("driver_id"),
+                s.get("state"),
+                s.get("start_at"),
+                s.get("finish_at"),
+                s.get("started_at"),
+                s.get("finished_at"),
+                s.get("route_id"),
+                s.get("scope_type"),
+                s.get("change_source"),
+                s.get("mileage"),
+                s.get("provider_id"),
+                json.dumps(s, ensure_ascii=False),
+            ),
+        )
+        n += 1
+    return n
+
+
 def persist_export(payload: dict[str, Any]) -> dict[str, Any]:
     day = payload["day"]
     orders = payload.get("orders") or []
     photos = payload.get("photos") or []
+    schedules = payload.get("schedules") or []
     counts = payload.get("counts") or {}
     exported_at = payload.get("exported_at")
 
@@ -106,6 +178,7 @@ def persist_export(payload: dict[str, Any]) -> dict[str, Any]:
         )
         conn.execute("DELETE FROM orders_day WHERE day=%s::date", (day,))
         conn.execute("DELETE FROM photos_day WHERE day=%s::date", (day,))
+        n_sched = _persist_schedules(conn, day, schedules)
 
         for o in orders:
             conn.execute(
@@ -117,7 +190,8 @@ def persist_export(payload: dict[str, Any]) -> dict[str, Any]:
                   human_breach_state, human_accept_note, human_regoper_note,
                   has_report, report_success, report_comment, fail_reason,
                   photo_count, geo_flag, geo_min_m, geo_out, geo_no_coord,
-                  track_exists, track_flag, track_min_m, arrival_ts, time_flag, time_dev_min, raw
+                  track_exists, track_flag, track_min_m, arrival_ts, time_flag, time_dev_min,
+                  foto_doezd_flag, foto_doezd_m, raw
                 ) VALUES (
                   %s::date,%s,%s,%s,%s,%s,%s,%s,
                   %s,%s,%s,%s,%s,%s,
@@ -125,7 +199,8 @@ def persist_export(payload: dict[str, Any]) -> dict[str, Any]:
                   %s,%s,%s,
                   %s,%s,%s,%s,
                   %s,%s,%s,%s,%s,
-                  %s,%s,%s,%s,%s,%s,%s::jsonb
+                  %s,%s,%s,%s,%s,%s,
+                  %s,%s,%s::jsonb
                 )
                 """,
                 (
@@ -167,6 +242,8 @@ def persist_export(payload: dict[str, Any]) -> dict[str, Any]:
                     o.get("arrival_ts"),
                     str(o.get("time_flag")) if o.get("time_flag") is not None else None,
                     o.get("time_dev_min"),
+                    str(o.get("foto_doezd_flag")) if o.get("foto_doezd_flag") is not None else None,
+                    o.get("foto_doezd_m"),
                     json.dumps(o, ensure_ascii=False),
                 ),
             )
@@ -193,11 +270,15 @@ def persist_export(payload: dict[str, Any]) -> dict[str, Any]:
         for p in photos:
             conn.execute(
                 """
-                INSERT INTO photos_day(day, photo_id, order_id, ptype, time, filename, blob_key, photo_url, lon, lat)
-                VALUES (%s::date,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                INSERT INTO photos_day(
+                  day, photo_id, order_id, ptype, time, filename, blob_key, photo_url,
+                  lon, lat, schedule_id
+                )
+                VALUES (%s::date,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (day, photo_id) DO UPDATE SET
                   blob_key=EXCLUDED.blob_key, photo_url=EXCLUDED.photo_url,
-                  lon=EXCLUDED.lon, lat=EXCLUDED.lat
+                  lon=EXCLUDED.lon, lat=EXCLUDED.lat,
+                  schedule_id=COALESCE(EXCLUDED.schedule_id, photos_day.schedule_id)
                 """,
                 (
                     day,
@@ -210,10 +291,110 @@ def persist_export(payload: dict[str, Any]) -> dict[str, Any]:
                     p.get("photo_url"),
                     p.get("lon"),
                     p.get("lat"),
+                    p.get("schedule_id"),
                 ),
             )
 
-    return {"day": day, "orders": len(orders), "photos": len(photos), "counts": counts}
+    return {
+        "day": day,
+        "orders": len(orders),
+        "photos": len(photos),
+        "schedules": n_sched,
+        "counts": counts,
+    }
+
+
+def persist_schedules_enrich(payload: dict[str, Any]) -> dict[str, Any]:
+    """Upsert schedules_day + photo/order schedule_id without wiping orders/photos."""
+    ensure_schema()
+    day = payload["day"]
+    schedules = payload.get("schedules") or []
+    photos = payload.get("photos") or []
+    orders = payload.get("orders") or []
+    with db() as conn:
+        n_sched = _persist_schedules(conn, day, schedules)
+        n_photo = 0
+        for p in photos:
+            sid = p.get("schedule_id")
+            if sid is None or p.get("id") is None:
+                continue
+            cur = conn.execute(
+                """
+                UPDATE photos_day SET schedule_id=%s
+                WHERE day=%s::date AND photo_id=%s
+                """,
+                (sid, day, p["id"]),
+            )
+            n_photo += cur.rowcount
+        n_ord = 0
+        for o in orders:
+            sid = o.get("schedule_id")
+            oid = o.get("id") if o.get("id") is not None else o.get("order_id")
+            if sid is None or oid is None:
+                continue
+            cur = conn.execute(
+                """
+                UPDATE orders_day SET schedule_id=%s
+                WHERE day=%s::date AND order_id=%s AND (
+                  schedule_id IS NULL OR schedule_id IS DISTINCT FROM %s
+                )
+                """,
+                (sid, day, oid, sid),
+            )
+            n_ord += cur.rowcount
+    return {
+        "day": day,
+        "schedules": n_sched,
+        "photos_updated": n_photo,
+        "orders_updated": n_ord,
+        "counts": payload.get("counts") or {},
+    }
+
+
+def enrich_schedules_day(day: str) -> dict[str, Any]:
+    """Pull light schedules export from Greta and upsert into Agent1 DB."""
+    payload = pull_schedules_json(day)
+    return persist_schedules_enrich(payload)
+
+
+def _failed_shift_ids(rows: list[Any], mileage_by_sid: dict[int, float | None]) -> set[int]:
+    """TZ §5.4: all orders canceled_by_driver at the same second, mileage≈0."""
+    from collections import defaultdict
+
+    by_sid: dict[int, list[Any]] = defaultdict(list)
+    for r in rows:
+        sid = r.get("schedule_id") if hasattr(r, "get") else r["schedule_id"]
+        if sid is None:
+            continue
+        by_sid[int(sid)].append(r)
+
+    failed: set[int] = set()
+    for sid, ords in by_sid.items():
+        if not ords:
+            continue
+        states = {(o["state"] or "") for o in ords}
+        if states != {"canceled_by_driver"}:
+            continue
+        # same canceled_at second
+        seconds: set[str] = set()
+        for o in ords:
+            ca = o.get("canceled_at")
+            if ca is None:
+                seconds.add("")
+                continue
+            if hasattr(ca, "isoformat"):
+                seconds.add(ca.strftime("%Y-%m-%dT%H:%M:%S"))
+            else:
+                seconds.add(str(ca)[:19])
+        if len(seconds) != 1 or "" in seconds:
+            continue
+        mil = mileage_by_sid.get(sid)
+        if mil is None:
+            mil = 0.0
+        if float(mil or 0) > 0.01:
+            continue
+        failed.add(sid)
+    return failed
 
 
 def enqueue_stage1(day: str, note: str = "shadow stage1") -> dict[str, Any]:
@@ -238,7 +419,8 @@ def enqueue_stage1(day: str, note: str = "shadow stage1") -> dict[str, Any]:
         )
         photos_by_order: dict[int, list[dict]] = {}
         for p in conn.execute(
-            "SELECT photo_id, order_id, blob_key, photo_url, ptype, filename FROM photos_day WHERE day=%s::date",
+            "SELECT photo_id, order_id, blob_key, photo_url, ptype, filename, schedule_id "
+            "FROM photos_day WHERE day=%s::date",
             (day,),
         ):
             photos_by_order.setdefault(int(p["order_id"]), []).append(
@@ -248,17 +430,27 @@ def enqueue_stage1(day: str, note: str = "shadow stage1") -> dict[str, Any]:
                     "photo_url": p.get("photo_url"),
                     "ptype": p["ptype"],
                     "filename": p["filename"],
+                    "schedule_id": p.get("schedule_id"),
                 }
             )
 
+        mileage_by_sid: dict[int, float | None] = {}
+        for s in conn.execute(
+            "SELECT schedule_id, mileage FROM schedules_day WHERE day=%s::date",
+            (day,),
+        ):
+            mileage_by_sid[int(s["schedule_id"])] = s.get("mileage")
+        failed_sids = _failed_shift_ids(rows, mileage_by_sid)
+
         for r in rows:
             oid = int(r["order_id"])
+            sid = r["schedule_id"]
             payload = {
                 "kind": "stage1_stage2",
                 "day": day,
                 "order_id": oid,
                 "state": r["state"],
-                "schedule_id": r["schedule_id"],
+                "schedule_id": sid,
                 "photo_count": r["photo_count"] or 0,
                 "geo_flag": r["geo_flag"],
                 "geo_min_m": r["geo_min_m"],
@@ -269,6 +461,8 @@ def enqueue_stage1(day: str, note: str = "shadow stage1") -> dict[str, Any]:
                 "track_min_m": r["track_min_m"],
                 "time_flag": r["time_flag"],
                 "time_dev_min": r["time_dev_min"],
+                "foto_doezd_flag": r["foto_doezd_flag"] if "foto_doezd_flag" in r else None,
+                "foto_doezd_m": r["foto_doezd_m"] if "foto_doezd_m" in r else None,
                 "has_report": r["has_report"],
                 "fail_reason": r["fail_reason"],
                 "report_comment": r["report_comment"],
@@ -277,6 +471,8 @@ def enqueue_stage1(day: str, note: str = "shadow stage1") -> dict[str, Any]:
                 "site_address": r["site_address"],
                 "waste_type_name": r["waste_type_name"],
                 "change_source": r["change_source"],
+                "transfered": bool(r["transfered"]) if "transfered" in r and r["transfered"] is not None else False,
+                "failed_shift": bool(sid is not None and int(sid) in failed_sids),
                 "photos": photos_by_order.get(oid, []),
             }
             job_id = str(uuid.uuid4())
@@ -299,9 +495,12 @@ def enqueue_stage1(day: str, note: str = "shadow stage1") -> dict[str, Any]:
         )
         conn.execute(
             "INSERT INTO events(ts, level, message) VALUES (NOW(), 'info', %s)",
-            (f"enqueued stage1 run {run_id} day={day} jobs={len(rows)}",),
+            (
+                f"enqueued stage1 run {run_id} day={day} jobs={len(rows)} "
+                f"failed_shifts={len(failed_sids)}",
+            ),
         )
-    return {"run_id": run_id, "jobs": len(rows)}
+    return {"run_id": run_id, "jobs": len(rows), "failed_shifts": len(failed_sids)}
 
 
 def ingest_and_enqueue(day: str) -> dict[str, Any]:

@@ -51,10 +51,41 @@ CREATE TABLE IF NOT EXISTS orders_day (
   arrival_ts BIGINT,
   time_flag TEXT,
   time_dev_min DOUBLE PRECISION,
+  foto_doezd_flag TEXT,
+  foto_doezd_m DOUBLE PRECISION,
   raw JSONB,
   PRIMARY KEY (day, order_id)
 );
 CREATE INDEX IF NOT EXISTS idx_orders_day_state ON orders_day(day, state);
+-- migrate older DBs that were created before schedule_id existed
+ALTER TABLE orders_day ADD COLUMN IF NOT EXISTS schedule_id BIGINT;
+ALTER TABLE orders_day ADD COLUMN IF NOT EXISTS foto_doezd_flag TEXT;
+ALTER TABLE orders_day ADD COLUMN IF NOT EXISTS foto_doezd_m DOUBLE PRECISION;
+ALTER TABLE photos_day ADD COLUMN IF NOT EXISTS photo_url TEXT;
+ALTER TABLE photos_day ADD COLUMN IF NOT EXISTS schedule_id BIGINT;
+CREATE INDEX IF NOT EXISTS idx_orders_day_schedule ON orders_day(day, schedule_id);
+
+-- Greta Schedule = «смена»; id == orders.schedule_id / photos.schedule_id
+CREATE TABLE IF NOT EXISTS schedules_day (
+  day DATE NOT NULL,
+  schedule_id BIGINT NOT NULL,
+  vehicle_id BIGINT,
+  plate TEXT,
+  driver_id BIGINT,
+  state TEXT,
+  start_at TIMESTAMPTZ,
+  finish_at TIMESTAMPTZ,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  route_id BIGINT,
+  scope_type TEXT,
+  change_source TEXT,
+  mileage DOUBLE PRECISION,
+  provider_id BIGINT,
+  raw JSONB,
+  PRIMARY KEY (day, schedule_id)
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_day_vehicle ON schedules_day(day, vehicle_id);
 
 CREATE TABLE IF NOT EXISTS photos_day (
   day DATE NOT NULL,
@@ -68,11 +99,14 @@ CREATE TABLE IF NOT EXISTS photos_day (
   lon DOUBLE PRECISION,
   lat DOUBLE PRECISION,
   cached_path TEXT,
+  schedule_id BIGINT,
   PRIMARY KEY (day, photo_id)
 );
 CREATE INDEX IF NOT EXISTS idx_photos_day_order ON photos_day(day, order_id);
+CREATE INDEX IF NOT EXISTS idx_photos_day_schedule ON photos_day(day, schedule_id);
 -- migrate older DBs
 ALTER TABLE photos_day ADD COLUMN IF NOT EXISTS photo_url TEXT;
+ALTER TABLE photos_day ADD COLUMN IF NOT EXISTS schedule_id BIGINT;
 
 CREATE TABLE IF NOT EXISTS agent_decisions (
   day DATE NOT NULL,

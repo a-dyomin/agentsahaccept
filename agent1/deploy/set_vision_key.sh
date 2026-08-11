@@ -34,7 +34,7 @@ for line in lines:
 for k, v in vals.items():
     if k not in seen:
         out.append(f"{k}={v}")
-p.write_text("\\n".join(out) + "\\n")
+p.write_text("\n".join(out) + "\n")
 p.chmod(0o600)
 print("vision_key_set", sorted(vals))
 PY

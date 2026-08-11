@@ -27,6 +27,17 @@ def process_job(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     stage2 = None
+    # Skip vision for coverage / consumer / failed-shift (TZ §5.1 / §5.4)
+    skip_s2 = bool(payload.get("failed_shift") or payload.get("transfered"))
+    state = str(payload.get("state") or "")
+    sid = payload.get("schedule_id")
+    if (
+        skip_s2
+        or sid in (None, "", 0)
+        or state in {"created", "", "canceled_by_dispatcher", "canceled_by_client"}
+    ):
+        return decide_stage1(payload, None)
+
     if STAGE2_ENABLED:
         photos = payload.get("photos") or []
         stage2 = run_stage2(payload, photos)

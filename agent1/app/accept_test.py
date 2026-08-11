@@ -5,6 +5,12 @@ from typing import Any
 
 from stage2 import Checklist, route_checklist_for_accept
 
+# Gold numbers valid ONLY for this day (errors doc §5: other days are reference-only)
+GOLD_DAY = "2026-07-12"
+
+# Gold numbers are valid ONLY for this day (errors doc §5)
+GOLD_DAY = "2026-07-12"
+
 # Expected from repo doc for day 2026-07-12
 EXPECTED_COUNTS = {
     "orders": 9193,

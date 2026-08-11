@@ -7,11 +7,26 @@ require "json"
 
 R = 6_371_000.0
 PHOTO_RADIUS_M = 100.0
+# ГЕО: хотя бы один снимок ≤ PHOTO_RADIUS_M от площадки (geo_min)
 TRACK_RADIUS_M = 200.0
 NO_PICKUP_TRACK_RADIUS_M = 300.0
+FOTO_DOEZD_RADIUS_M = 100.0
 TIME_TOL_MIN = 7
 NO_PICKUP_TIME_TOL_MIN = 5
 TRACK_WINDOW_MIN = 30
+
+# Greta Site.stype enum → UI/CSV label (ровно два значения)
+STYPE_LABEL = {
+  "containers" => "Контейнерная площадка",
+  "scheduled" => "Сигнальный метод"
+}.freeze
+
+def site_stype_label(site)
+  return nil unless site
+  raw = site.stype
+  return nil if raw.nil?
+  STYPE_LABEL[raw.to_s] || raw.to_s
+end
 
 def haversine_m(lat1, lon1, lat2, lon2)
   p1 = lat1 * Math::PI / 180
@@ -156,6 +171,7 @@ orders.find_each(batch_size: 500) do |o|
     photos_out << {
       id: ph.id,
       order_id: o.id,
+      schedule_id: ph.try(:schedule_id) || o.schedule_id,
       ptype: ph.ptype,
       time: ph.time&.iso8601,
       filename: ph.filename,
@@ -175,9 +191,13 @@ orders.find_each(batch_size: 500) do |o|
   track_exists = false
   track_min = nil
   arrival_ts = nil
+  arrival_lat = nil
+  arrival_lon = nil
   time_dev_min = nil
   time_flag = "ND"
   track_flag = "ND"
+  foto_doezd_m = nil
+  foto_doezd_flag = "ND"
 
   if veh_id && site_lat && site_lon
     pts = tracks_by_vehicle[veh_id]
@@ -192,6 +212,8 @@ orders.find_each(batch_size: 500) do |o|
       if best
         track_min = best[0]
         arrival_ts = best[1][:t]
+        arrival_lat = best[1][:lat]
+        arrival_lon = best[1][:lon]
       end
       # photo-anchored search if photos exist
       if photo_times.any?
@@ -206,6 +228,8 @@ orders.find_each(batch_size: 500) do |o|
         if anchored
           track_min = anchored[0]
           arrival_ts = anchored[1][:t]
+          arrival_lat = anchored[1][:lat]
+          arrival_lon = anchored[1][:lon]
           time_dev_min = ((anchored[2] - arrival_ts).abs / 60.0)
         end
       end
@@ -217,9 +241,31 @@ orders.find_each(batch_size: 500) do |o|
                   else
                     time_dev_min <= tol ? 1 : 0
                   end
+      # ФОТО_ДОЕЗД (невывоз §5.3): хотя бы один снимок ≤100м от точки доезда
+      if arrival_lat && arrival_lon
+        phs.each do |ph|
+          ex = exifs[ph.id]
+          lon = lat = nil
+          begin
+            c = ex&.lonlat&.coordinates
+            lon, lat = c[0], c[1] if c
+          rescue StandardError
+          end
+          next if lon.nil? || lat.nil?
+          d = haversine_m(arrival_lat, arrival_lon, lat, lon)
+          foto_doezd_m = d if foto_doezd_m.nil? || d < foto_doezd_m
+        end
+        foto_doezd_flag = if foto_doezd_m.nil?
+                            "ND"
+                          else
+                            foto_doezd_m <= FOTO_DOEZD_RADIUS_M ? 1 : 0
+                          end
+      end
     else
-      track_flag = 0
+      # нет точек трека: ТРЕК_ЕСТЬ=0; ТРЕК/ВРЕМЯ/ФОТО_ДОЕЗД = ND (ставит Stage1)
+      track_flag = "ND"
       time_flag = "ND"
+      foto_doezd_flag = "ND"
     end
   end
 
@@ -232,7 +278,7 @@ orders.find_each(batch_size: 500) do |o|
     state: o.state,
     site_id: o.site_id,
     site_address: site&.address,
-    site_stype: site&.stype,
+    site_stype: site_stype_label(site),
     site_lat: site_lat,
     site_lon: site_lon,
     schedule_id: o.schedule_id,
@@ -268,8 +314,12 @@ orders.find_each(batch_size: 500) do |o|
     track_flag: track_flag,
     track_min_m: track_min&.round(1),
     arrival_ts: arrival_ts,
+    arrival_lat: arrival_lat,
+    arrival_lon: arrival_lon,
     time_flag: time_flag,
-    time_dev_min: time_dev_min&.round(2)
+    time_dev_min: time_dev_min&.round(2),
+    foto_doezd_flag: foto_doezd_flag,
+    foto_doezd_m: foto_doezd_m&.round(1)
   }
 end
 
@@ -279,7 +329,28 @@ sites_out = sites.values.map do |s|
   rescue StandardError
     nil
   end
-  { id: s.id, address: s.address, name: s.name, stype: s.stype, lon: c && c[0], lat: c && c[1] }
+  { id: s.id, address: s.address, name: s.name, stype: site_stype_label(s), lon: c && c[0], lat: c && c[1] }
+end
+
+# Greta «ID смены» = schedules.id (= orders.schedule_id / photos.schedule_id)
+schedules_out = schedules.values.map do |s|
+  v = s.vehicle_id && vehicles[s.vehicle_id]
+  {
+    id: s.id,
+    vehicle_id: s.vehicle_id,
+    plate: v&.license_plate,
+    driver_id: s.try(:driver_id),
+    state: s.try(:state),
+    start_at: s.try(:start_at)&.iso8601,
+    finish_at: s.try(:finish_at)&.iso8601,
+    started_at: s.try(:started_at)&.iso8601,
+    finished_at: s.try(:finished_at)&.iso8601,
+    route_id: s.try(:route_id),
+    scope_type: s.try(:scope_type),
+    change_source: s.try(:change_source),
+    mileage: s.try(:mileage),
+    provider_id: s.try(:provider_id)
+  }
 end
 
 out = {
@@ -292,12 +363,14 @@ out = {
     vehicles: vehicles.size,
     sites: sites_out.size,
     sites_with_coords: sites_out.count { |s| s[:lat] && s[:lon] },
+    schedules: schedules_out.size,
     fail_reasons: fail_reasons.size,
     tracks_points: tracks_by_vehicle.values.sum(&:size),
     wialon_vehicles: wialon_vehicles,
     track_source: "wialon"
   },
   sites: sites_out,
+  schedules: schedules_out,
   orders: orders_out,
   photos: photos_out
 }

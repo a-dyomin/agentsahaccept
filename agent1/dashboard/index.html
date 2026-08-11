@@ -3,149 +3,490 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent1 — теневой акцепт</title>
+  <title>Agent1 — теневой акцепт САХ</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg0:#0f1a17; --bg1:#173028; --ink:#e8f2ec; --muted:#9bb5a8;
-      --line:rgba(232,242,236,.12); --ok:#3dcf8e; --warn:#e2b34a; --bad:#ef6b5b; --idle:#6f93ff;
-      --card:rgba(255,255,255,.04);
+      --twilight: #233255;
+      --cornflower: #5082e6;
+      --cyan: #5ad2ff;
+      --red: #e62d32;
+      --yellow: #fabe00;
+      --green: #22a06b;
+      --bg: #f4f6fb;
+      --surface: #ffffff;
+      --border: #e2e8f3;
+      --text: #233255;
+      --text-muted: #6b7a99;
+      --sidebar-width: 260px;
+      --radius: 10px;
+      --shadow: 0 4px 24px rgba(35, 50, 85, 0.08);
     }
-    *{box-sizing:border-box}
-    body{margin:0;min-height:100vh;font-family:Manrope,system-ui,sans-serif;color:var(--ink);
-      background:radial-gradient(1200px 600px at 10% -10%,#1f4a3a 0%,transparent 55%),
-      radial-gradient(900px 500px at 100% 0%,#243852 0%,transparent 50%),
-      linear-gradient(160deg,var(--bg0),var(--bg1))}
-    .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 48px}
-    .brand{font-size:clamp(2rem,5vw,3rem);font-weight:800;letter-spacing:-.03em;margin:0 0 6px}
-    .sub{color:var(--muted);margin:0 0 18px;max-width:46rem}
-    .filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin-bottom:16px;padding:12px 14px;
-      border:1px solid var(--line);background:var(--card);border-radius:16px}
-    .filters label{display:flex;flex-direction:column;gap:6px;font-size:11px;text-transform:uppercase;
-      letter-spacing:.06em;color:var(--muted);font-family:"IBM Plex Mono",monospace}
-    .filters input,.filters select,.filters button{font:inherit;color:var(--ink);background:rgba(0,0,0,.25);
-      border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-height:38px}
-    .filters button{cursor:pointer;font-weight:700;background:rgba(61,207,142,.15);border-color:rgba(61,207,142,.35)}
-    .filters button.ghost{background:transparent;font-weight:600}
-    .statusbar{display:grid;grid-template-columns:1.4fr repeat(6,1fr);gap:10px;padding:14px;
-      border:1px solid var(--line);background:var(--card);border-radius:18px;margin-bottom:14px}
-    .cell{padding:8px 10px}
-    .label{font-family:"IBM Plex Mono",monospace;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:8px}
-    .value{font-size:1.45rem;font-weight:700;line-height:1.1}
-    .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;
-      font-family:"IBM Plex Mono",monospace;font-size:13px;font-weight:600;border:1px solid var(--line);background:rgba(0,0,0,.2)}
-    .dot{width:8px;height:8px;border-radius:50%;background:var(--idle)}
-    .dot.running,.dot.processing,.dot.ingesting{background:var(--ok);box-shadow:0 0 12px var(--ok)}
-    .dot.degraded,.dot.error{background:var(--bad)}
-    .costs{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
-    .costcard{border:1px solid var(--line);background:var(--card);border-radius:14px;padding:12px 14px}
-    .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}
-    .panel{border:1px solid var(--line);background:var(--card);border-radius:16px;padding:14px;min-height:260px}
-    .panel h2{margin:0 0 10px;font-size:1rem}
-    table{width:100%;border-collapse:collapse;font-size:13px}
-    th,td{text-align:left;padding:7px 5px;border-bottom:1px solid var(--line);vertical-align:top}
-    th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-    .mono{font-family:"IBM Plex Mono",monospace}
-    .foot{margin-top:16px;color:var(--muted);font-size:12px}
-    .meta{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:10px}
-    .rangehint{color:var(--muted);font-size:12px;margin:0 0 12px}
-    @media(max-width:980px){
-      .statusbar{grid-template-columns:1fr 1fr}.costs{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr}
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      font-family: Inter, Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select { font: inherit; }
+    .app { display: flex; min-height: 100vh; }
+
+    /* Sidebar */
+    .sidebar {
+      width: var(--sidebar-width);
+      background: var(--twilight);
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 100;
+    }
+    .sidebar-brand {
+      display: flex; align-items: center; gap: 12px;
+      padding: 20px 18px;
+      border-bottom: 1px solid rgba(255,255,255,.1);
+    }
+    .brand-mark {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--cornflower), var(--cyan));
+      display: grid; place-items: center; font-weight: 700; font-size: 14px;
+    }
+    .brand-title { font-size: 14px; font-weight: 700; line-height: 1.2; }
+    .brand-sub { font-size: 11px; opacity: .65; margin-top: 2px; }
+    .sidebar-nav { flex: 1; overflow-y: auto; padding: 12px 10px; }
+    .nav-section {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .06em; opacity: .5; padding: 16px 12px 6px;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 10px 12px; border: none; border-radius: 8px;
+      background: transparent; color: rgba(255,255,255,.85);
+      cursor: pointer; text-align: left; font-size: 13px; font-weight: 500;
+      transition: background .15s;
+    }
+    .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; opacity: .85; }
+    .nav-item:hover { background: rgba(255,255,255,.08); }
+    .nav-item.active { background: var(--cornflower); color: #fff; }
+    .nav-count {
+      margin-left: auto; font-size: 11px; opacity: .75;
+      background: rgba(255,255,255,.12); padding: 1px 7px; border-radius: 10px;
+    }
+    .sidebar-foot {
+      padding: 14px 16px; border-top: 1px solid rgba(255,255,255,.1);
+      font-size: 11px; opacity: .7; line-height: 1.4;
+    }
+
+    /* Main */
+    .main {
+      margin-left: var(--sidebar-width);
+      flex: 1; min-width: 0;
+      padding: 24px 28px 40px;
+    }
+    .page-head {
+      display: flex; flex-wrap: wrap; gap: 12px;
+      align-items: flex-start; justify-content: space-between;
+      margin-bottom: 18px;
+    }
+    .page-head h1 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+    .page-head .sub { color: var(--text-muted); font-size: 13px; margin-top: 4px; max-width: 40rem; }
+    .head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 1px solid var(--border); background: var(--surface);
+      color: var(--text); border-radius: 8px; padding: 8px 12px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .btn:hover { border-color: #c9d4ea; }
+    .btn-primary { background: var(--cornflower); border-color: var(--cornflower); color: #fff; }
+    .btn-primary:hover { filter: brightness(1.05); }
+    .btn-ghost { background: transparent; }
+
+    .filters {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: end;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 12px 14px; margin-bottom: 16px;
+      box-shadow: var(--shadow);
+    }
+    .filters label {
+      display: flex; flex-direction: column; gap: 5px;
+      font-size: 11px; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    .filters input, .filters select {
+      min-height: 36px; min-width: 140px; padding: 7px 10px;
+      border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--text);
+    }
+
+    .kpi-row {
+      display: grid; grid-template-columns: 1.2fr repeat(4, 1fr);
+      gap: 12px; margin-bottom: 16px;
+    }
+    .kpi {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow);
+      min-height: 96px;
+    }
+    .kpi.hero {
+      background: var(--twilight); color: #fff; border-color: transparent;
+    }
+    .kpi .label {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .05em; color: var(--text-muted); margin-bottom: 10px;
+    }
+    .kpi.hero .label { color: rgba(255,255,255,.7); }
+    .kpi .value { font-size: 28px; font-weight: 700; letter-spacing: -.03em; line-height: 1.1; }
+    .kpi .hint { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+    .kpi.hero .hint { color: rgba(255,255,255,.65); }
+
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 600;
+      background: rgba(255,255,255,.12);
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #9bb0d0;
+    }
+    .dot.running, .dot.processing, .dot.ingesting { background: #3dcf8e; box-shadow: 0 0 10px #3dcf8e; }
+    .dot.degraded, .dot.error { background: var(--red); }
+    .dot.idle, .dot.done { background: var(--cyan); }
+
+    .grid-2 { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow);
+    }
+    .card h2 {
+      font-size: 14px; font-weight: 700; margin-bottom: 12px;
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .info-box {
+      display: flex; gap: 12px; align-items: flex-start;
+      background: #eef4ff; border: 1px solid #d5e3ff; color: var(--text);
+      border-radius: var(--radius); padding: 12px 14px; margin-bottom: 16px;
+      font-size: 13px; line-height: 1.45;
+    }
+    .info-box .ico {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--cornflower); color: #fff; display: grid; place-items: center;
+      font-size: 12px; font-weight: 700; flex-shrink: 0;
+    }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th {
+      color: var(--text-muted); font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .05em;
+    }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover td { background: #f7f9fd; }
+    .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .muted { color: var(--text-muted); }
+    .empty { color: var(--text-muted); padding: 18px 4px; font-size: 13px; }
+
+    .badge {
+      display: inline-flex; align-items: center; padding: 3px 9px;
+      border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap;
+    }
+    .badge-ok { background: #e6f7ef; color: #1b7a4e; }
+    .badge-warn { background: #fff4d6; color: #9a6b00; }
+    .badge-bad { background: #fde8e8; color: #b42318; }
+    .badge-info { background: #e8f0fe; color: #2f5eb8; }
+    .badge-neutral { background: #eef1f6; color: #53627a; }
+
+    .view { display: none; }
+    .view.active { display: block; }
+    .meta-row { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 12px; }
+    .meta-row .label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; }
+    .meta-row .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+
+    .foot {
+      margin-top: 18px; color: var(--text-muted); font-size: 12px;
+    }
+
+    @media (max-width: 1100px) {
+      .kpi-row { grid-template-columns: 1fr 1fr; }
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 820px) {
+      .sidebar { position: static; width: 100%; }
+      .app { flex-direction: column; }
+      .main { margin-left: 0; padding: 16px; }
+      .sidebar-nav { display: flex; flex-wrap: wrap; gap: 4px; }
+      .nav-section { width: 100%; }
+      .nav-item { width: auto; }
+      .kpi-row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1 class="brand">agent1.izhon.ru</h1>
-    <p class="sub">Тень: Stage1 (правила) + Stage2 (vision). В Гретту не пишет. Автоingest — позавчера по расписанию.</p>
-
-    <section class="filters">
-      <label>День
-        <input type="date" id="day" />
-      </label>
-      <label>С
-        <input type="date" id="dateFrom" />
-      </label>
-      <label>По
-        <input type="date" id="dateTo" />
-      </label>
-      <button type="button" id="apply">Применить</button>
-      <button type="button" class="ghost" id="today">Сегодня</button>
-      <button type="button" class="ghost" id="dby">Позавчера</button>
-      <button type="button" class="ghost" id="all">Все дни</button>
-    </section>
-    <p class="rangehint" id="rangeHint">фильтр: все дни</p>
-
-    <section class="statusbar">
-      <div class="cell">
-        <div class="label">Статус</div>
-        <div class="pill"><span class="dot idle" id="dot"></span><span id="state">…</span></div>
-      </div>
-      <div class="cell"><div class="label">Очередь</div><div class="value mono" id="queued">—</div></div>
-      <div class="cell"><div class="label">В работе</div><div class="value mono" id="progress">—</div></div>
-      <div class="cell"><div class="label">Обработано</div><div class="value mono" id="done">—</div></div>
-      <div class="cell"><div class="label">Ошибки</div><div class="value mono" id="errors">—</div></div>
-      <div class="cell"><div class="label">Согласие</div><div class="value mono" id="agree">—</div></div>
-      <div class="cell"><div class="label">Vision $</div><div class="value mono" id="costUsd">—</div></div>
-    </section>
-
-    <section class="costs">
-      <div class="costcard"><div class="label">Vision вызовы</div><div class="value mono" id="visionCalls">—</div></div>
-      <div class="costcard"><div class="label">Токены</div><div class="value mono" id="tokens">—</div></div>
-      <div class="costcard"><div class="label">Prompt / Completion</div><div class="value mono" id="tokSplit">—</div></div>
-      <div class="costcard"><div class="label">Ингест</div><div class="mono" id="ingest" style="font-size:1.05rem;font-weight:700">—</div></div>
-    </section>
-
-    <div class="grid">
-      <section class="panel">
-        <h2>Агент ↔ человек</h2>
-        <div class="meta">
-          <div><div class="label">Сверено</div><div class="value mono" id="compared">—</div></div>
-          <div><div class="label">Ждём человека</div><div class="value mono" id="pending">—</div></div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark">A1</div>
+        <div>
+          <div class="brand-title">Agent1 · Акцепт</div>
+          <div class="brand-sub">Теневой режим · САХ</div>
         </div>
-        <table>
-          <thead><tr><th>День</th><th>Заявка</th><th>Агент</th><th>Человек</th><th>Diff</th></tr></thead>
-          <tbody id="diffs"></tbody>
-        </table>
-        <h2 style="margin-top:16px">Последние вердикты</h2>
-        <table>
-          <thead><tr><th>Заявка</th><th>ИТОГ</th><th>Human</th><th>Match</th></tr></thead>
-          <tbody id="results"></tbody>
-        </table>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-section">Операции</div>
+        <button class="nav-item active" data-view="monitor" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-4 4 4 5-6"/></svg>
+          Монитор
+        </button>
+        <button class="nav-item" data-view="archive" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M5 7v13h14V7M9 3h6l1 4H8z"/></svg>
+          Архив дней
+          <span class="nav-count" id="navDays">0</span>
+        </button>
+        <button class="nav-item" data-view="day" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+          День
+        </button>
+        <div class="nav-section">Аналитика</div>
+        <button class="nav-item" data-view="vision" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Vision / $
+        </button>
+        <button class="nav-item" data-view="shifts" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 17h4M2 17h1M17 17h1M18 17V9l-3-4H6v12M6 9h9"/></svg>
+          Смены
+        </button>
+        <div class="nav-section">Служебное</div>
+        <button class="nav-item" data-view="system" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Система
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        Shadow-only · в Гретту не пишет<br />
+        Автоingest D‑2 · 01:00 Самара
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- MONITOR -->
+      <section class="view active" id="view-monitor">
+        <div class="page-head">
+          <div>
+            <h1>Монитор</h1>
+            <p class="sub">Живые KPI текущего прогона и состояния агента.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn" type="button" id="gotoDby">Открыть позавчера</button>
+            <button class="btn btn-primary" type="button" id="refreshAll">Обновить</button>
+          </div>
+        </div>
+        <div class="info-box">
+          <div class="ico">i</div>
+          <div id="monitorInfo">Загрузка статуса…</div>
+        </div>
+        <div class="kpi-row">
+          <div class="kpi hero">
+            <div class="label">Статус агента</div>
+            <div class="status-pill"><span class="dot idle" id="mDot"></span><span id="mState">…</span></div>
+            <div class="hint" id="mMode">shadow</div>
+          </div>
+          <div class="kpi"><div class="label">Очередь</div><div class="value mono" id="mQueued">—</div><div class="hint">jobs queued</div></div>
+          <div class="kpi"><div class="label">В работе</div><div class="value mono" id="mProgress">—</div><div class="hint">leased / processing</div></div>
+          <div class="kpi"><div class="label">Обработано</div><div class="value mono" id="mDone">—</div><div class="hint">results</div></div>
+          <div class="kpi"><div class="label">Ошибки</div><div class="value mono" id="mErrors">—</div><div class="hint">jobs error</div></div>
+        </div>
+        <div class="kpi-row" style="grid-template-columns:repeat(5,1fr)">
+          <div class="kpi hero"><div class="label">Производительность труда</div><div class="value mono" id="mProductivity">—</div><div class="hint" id="mProductivityHint">решено агентом без человека</div></div>
+          <div class="kpi"><div class="label">Согласие</div><div class="value mono" id="mAgree">—</div><div class="hint">только с human-акцептом</div></div>
+          <div class="kpi"><div class="label">Vision $</div><div class="value mono" id="mCost">—</div><div class="hint">в текущем фильтре</div></div>
+          <div class="kpi"><div class="label">Vision вызовы</div><div class="value mono" id="mCalls">—</div><div class="hint">chat completions</div></div>
+          <div class="kpi"><div class="label">Последний ingest</div><div class="value" style="font-size:18px" id="mIngest">—</div><div class="hint" id="mIngestHint">—</div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h2>Последние расхождения</h2>
+            <table>
+              <thead><tr><th>День</th><th>Заявка</th><th>Агент</th><th>Человек</th><th>Diff</th></tr></thead>
+              <tbody id="mDiffs"></tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h2>События</h2>
+            <table>
+              <thead><tr><th>Время</th><th>Lvl</th><th>Сообщение</th></tr></thead>
+              <tbody id="mEvents"></tbody>
+            </table>
+          </div>
+        </div>
       </section>
-      <section class="panel">
-        <h2>Распределение ИТОГ</h2>
-        <table>
-          <thead><tr><th>ИТОГ</th><th>N</th></tr></thead>
-          <tbody id="itog"></tbody>
-        </table>
-        <h2 style="margin-top:16px">Затраты по дням</h2>
-        <table>
-          <thead><tr><th>День</th><th>Calls</th><th>Tokens</th><th>$</th></tr></thead>
-          <tbody id="costDays"></tbody>
-        </table>
-        <h2 style="margin-top:16px">События</h2>
-        <table>
-          <thead><tr><th>Время</th><th>Lvl</th><th>Сообщение</th></tr></thead>
-          <tbody id="events"></tbody>
-        </table>
+
+      <!-- ARCHIVE -->
+      <section class="view" id="view-archive">
+        <div class="page-head">
+          <div>
+            <h1>Архив дней</h1>
+            <p class="sub">Дни, по которым есть ingest / решения. Клик — детализация дня.</p>
+          </div>
+        </div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>День</th><th>Заявки</th><th>Обработано</th><th>Согласие</th><th>Vision $</th><th>Статус</th>
+              </tr>
+            </thead>
+            <tbody id="archiveBody"></tbody>
+          </table>
+          <div class="empty" id="archiveEmpty" style="display:none">Архив пуст — ждём первый ночной D‑2 прогон.</div>
+        </div>
       </section>
-    </div>
-    <p class="foot">Обновление 2 с · shadow · API <span class="mono">/api/status?day=</span> / <span class="mono">date_from&amp;date_to</span></p>
+
+      <!-- DAY -->
+      <section class="view" id="view-day">
+        <div class="page-head">
+          <div>
+            <h1>День</h1>
+            <p class="sub">Детализация выбранного дня или периода.</p>
+          </div>
+        </div>
+        <section class="filters">
+          <label>День <input type="date" id="day" /></label>
+          <label>С <input type="date" id="dateFrom" /></label>
+          <label>По <input type="date" id="dateTo" /></label>
+          <button class="btn btn-primary" type="button" id="apply">Применить</button>
+          <button class="btn" type="button" id="today">Сегодня</button>
+          <button class="btn" type="button" id="dby">Позавчера</button>
+          <button class="btn btn-ghost" type="button" id="all">Все дни</button>
+        </section>
+        <p class="muted" id="rangeHint" style="margin:-6px 0 14px;font-size:12px">фильтр: все дни</p>
+        <div class="meta-row">
+          <div><div class="label">Сверено</div><div class="value mono" id="dCompared">—</div></div>
+          <div><div class="label">Ждём человека</div><div class="value mono" id="dPending">—</div></div>
+          <div><div class="label">Обработано</div><div class="value mono" id="dDone">—</div></div>
+          <div><div class="label">Согласие</div><div class="value mono" id="dAgree">—</div></div>
+          <div><div class="label">Производительность труда</div><div class="value mono" id="dProductivity">—</div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h2>Агент ↔ человек</h2>
+            <table>
+              <thead><tr><th>День</th><th>Заявка</th><th>Агент</th><th>Человек</th><th>Diff</th></tr></thead>
+              <tbody id="dDiffs"></tbody>
+            </table>
+            <h2 style="margin-top:18px">Последние вердикты</h2>
+            <table>
+              <thead><tr><th>Заявка</th><th>Адрес</th><th>Перевозчик</th><th>ИТОГ</th><th>Почему</th><th>Human</th><th>Match</th></tr></thead>
+              <tbody id="dResults"></tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h2>Распределение ИТОГ</h2>
+            <table>
+              <thead><tr><th>ИТОГ</th><th>N</th></tr></thead>
+              <tbody id="dItog"></tbody>
+            </table>
+            <h2 style="margin-top:18px">События</h2>
+            <table>
+              <thead><tr><th>Время</th><th>Lvl</th><th>Сообщение</th></tr></thead>
+              <tbody id="dEvents"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VISION -->
+      <section class="view" id="view-vision">
+        <div class="page-head">
+          <div>
+            <h1>Vision / затраты</h1>
+            <p class="sub">Токены и стоимость Stage2 по выбранному диапазону.</p>
+          </div>
+        </div>
+        <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
+          <div class="kpi hero"><div class="label">Стоимость</div><div class="value mono" id="vCost">—</div><div class="hint" id="vRange">—</div></div>
+          <div class="kpi"><div class="label">Вызовы</div><div class="value mono" id="vCalls">—</div></div>
+          <div class="kpi"><div class="label">Токены</div><div class="value mono" id="vTokens">—</div></div>
+          <div class="kpi"><div class="label">Prompt / Completion</div><div class="value mono" style="font-size:20px" id="vSplit">—</div></div>
+        </div>
+        <div class="card">
+          <h2>По дням</h2>
+          <table>
+            <thead><tr><th>День</th><th>Calls</th><th>Tokens</th><th>$</th></tr></thead>
+            <tbody id="vDays"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- SHIFTS -->
+      <section class="view" id="view-shifts">
+        <div class="page-head">
+          <div>
+            <h1>Смены</h1>
+            <p class="sub">ID смены Greta (<span class="mono">schedules.id</span>) за выбранный день.</p>
+          </div>
+        </div>
+        <section class="filters">
+          <label>День <input type="date" id="shiftDay" /></label>
+          <button class="btn btn-primary" type="button" id="shiftApply">Загрузить</button>
+        </section>
+        <div class="card">
+          <h2>Смены дня <span class="muted mono" id="shiftCount"></span></h2>
+          <table>
+            <thead>
+              <tr><th>ID смены</th><th>ТС</th><th>Статус</th><th>План</th><th>Факт</th><th>Route</th><th>Пробег</th></tr>
+            </thead>
+            <tbody id="shiftBody"></tbody>
+          </table>
+          <div class="empty" id="shiftEmpty" style="display:none">Нет смен за день (ещё не обогащали / нет ingest).</div>
+        </div>
+      </section>
+
+      <!-- SYSTEM -->
+      <section class="view" id="view-system">
+        <div class="page-head">
+          <div>
+            <h1>Система</h1>
+            <p class="sub">Здоровье API, режим работы, активный run.</p>
+          </div>
+        </div>
+        <div class="kpi-row" style="grid-template-columns:repeat(3,1fr)">
+          <div class="kpi"><div class="label">Health</div><div class="value" style="font-size:20px" id="sysHealth">—</div></div>
+          <div class="kpi"><div class="label">Mode</div><div class="value" style="font-size:20px" id="sysMode">—</div></div>
+          <div class="kpi"><div class="label">Active run</div><div class="value" style="font-size:16px" id="sysRun">—</div></div>
+        </div>
+        <div class="card">
+          <h2>Служебное</h2>
+          <table>
+            <tbody>
+              <tr><td>API</td><td class="mono">/api/status · /api/health · /api/schedules</td></tr>
+              <tr><td>Автоingest</td><td>позавчера · 01:00 Asia/Yekaterinburg</td></tr>
+              <tr><td>Writeback</td><td><span class="badge badge-neutral">shadow_only</span></td></tr>
+              <tr><td>UI</td><td>ELMA365-style · demosah tokens</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <p class="foot">Обновление монитора 2 с · agent1.izhon.ru</p>
+    </main>
   </div>
+
   <script>
     const el = (id) => document.getElementById(id);
     const params = new URLSearchParams(location.search);
+    let view = params.get('view') || 'monitor';
     let filter = {
       day: params.get('day') || '',
       date_from: params.get('date_from') || '',
       date_to: params.get('date_to') || '',
     };
-    if (filter.day) { el('day').value = filter.day; }
-    if (filter.date_from) el('dateFrom').value = filter.date_from;
-    if (filter.date_to) el('dateTo').value = filter.date_to;
+    let cacheStatus = null;
+    let archiveCache = {};
+
+    const VIEWS = ['monitor','archive','day','vision','shifts','system'];
 
     function iso(d) {
       const y = d.getFullYear();
@@ -158,14 +499,280 @@
       d.setDate(d.getDate() - n);
       return iso(d);
     }
+    function badgeForItog(v) {
+      const s = String(v || '');
+      if (/чист/i.test(s)) return 'badge-ok';
+      if (/наруш/i.test(s)) return 'badge-bad';
+      if (/человек|не взята|смена не|не проверя/i.test(s)) return 'badge-warn';
+      return 'badge-neutral';
+    }
     function syncUrl() {
       const p = new URLSearchParams();
+      if (view && view !== 'monitor') p.set('view', view);
       if (filter.day) p.set('day', filter.day);
       if (filter.date_from) p.set('date_from', filter.date_from);
       if (filter.date_to) p.set('date_to', filter.date_to);
       const q = p.toString();
       history.replaceState(null, '', q ? ('?' + q) : location.pathname);
     }
+    function setView(name) {
+      if (!VIEWS.includes(name)) name = 'monitor';
+      view = name;
+      document.querySelectorAll('.nav-item').forEach(b => {
+        b.classList.toggle('active', b.dataset.view === name);
+      });
+      document.querySelectorAll('.view').forEach(v => {
+        v.classList.toggle('active', v.id === 'view-' + name);
+      });
+      syncUrl();
+      if (name === 'shifts') loadShifts();
+      if (name === 'archive') renderArchive();
+    }
+
+    function statusUrl(extra = {}) {
+      const p = new URLSearchParams();
+      const day = extra.day ?? filter.day;
+      const df = extra.date_from ?? filter.date_from;
+      const dt = extra.date_to ?? filter.date_to;
+      if (day) p.set('day', day);
+      if (df) p.set('date_from', df);
+      if (dt) p.set('date_to', dt);
+      const q = p.toString();
+      return '/api/status' + (q ? ('?' + q) : '');
+    }
+
+    function fillDiffs(tbody, rows) {
+      tbody.innerHTML = (rows || []).map(x => `
+        <tr>
+          <td class="mono">${x.day || ''}</td>
+          <td class="mono">${x.order_id}</td>
+          <td><span class="badge ${badgeForItog(x.agent_itog)}">${x.agent_itog || ''}</span></td>
+          <td>${x.human_breach_state || '—'}</td>
+          <td class="mono muted">${x.diff_reason || ''}</td>
+        </tr>`).join('') || '<tr><td colspan="5" class="empty">нет расхождений / мало сверки</td></tr>';
+    }
+    function reasonForVerdict(x) {
+      const za = String(x.za_chto || '').trim();
+      const pm = String(x.pometki || '').trim();
+      if (za && pm) return za + ' · ' + pm;
+      return za || pm || '—';
+    }
+    function fillResults(tbody, rows) {
+      tbody.innerHTML = (rows || []).map(x => `
+        <tr>
+          <td class="mono">${x.order_id}</td>
+          <td class="muted" style="max-width:260px;white-space:normal">${x.site_address || '—'}</td>
+          <td>${x.provider_name || '—'}</td>
+          <td><span class="badge ${badgeForItog(x.agent_verdict)}">${x.agent_verdict || ''}</span></td>
+          <td class="muted" style="max-width:280px;white-space:normal">${reasonForVerdict(x)}</td>
+          <td>${x.human_verdict || '—'}</td>
+          <td class="mono">${x.match_flag == null ? '—' : x.match_flag}</td>
+        </tr>`).join('') || '<tr><td colspan="7" class="empty">—</td></tr>';
+    }
+    function fillEvents(tbody, rows) {
+      tbody.innerHTML = (rows || []).map(x => `
+        <tr>
+          <td class="mono">${(x.ts || '').toString().slice(11,19)}</td>
+          <td>${x.level}</td>
+          <td>${x.message}</td>
+        </tr>`).join('') || '<tr><td colspan="3" class="empty">—</td></tr>';
+    }
+
+    function renderMonitor(s) {
+      const st = s.agent_state || 'idle';
+      el('mState').textContent = st;
+      el('mDot').className = 'dot ' + st;
+      el('mMode').textContent = (s.mode || 'shadow') + (s.active_run ? ` · run ${String(s.active_run.id || '').slice(0,8)}…` : '');
+      el('mQueued').textContent = s.counts?.queued ?? '—';
+      el('mProgress').textContent = s.counts?.in_progress ?? '—';
+      el('mDone').textContent = s.counts?.processed ?? '—';
+      el('mErrors').textContent = s.counts?.errors ?? '—';
+      el('mAgree').textContent = s.agreement_pct == null ? 'n/a' : (s.agreement_pct + '%');
+      el('mProductivity').textContent = s.labor_productivity_pct == null ? 'n/a' : (s.labor_productivity_pct + '%');
+      el('mProductivityHint').textContent =
+        `${s.counts?.auto_checked ?? 0} самостоятельно · ${s.counts?.sent_to_human ?? 0} человеку`;
+      const costs = s.costs || {};
+      el('mCost').textContent = costs.cost_usd == null ? '—' : ('$' + Number(costs.cost_usd).toFixed(4));
+      el('mCalls').textContent = costs.vision_calls ?? '—';
+      const ing = s.last_ingest;
+      el('mIngest').textContent = ing?.day || 'нет';
+      el('mIngestHint').textContent = ing ? `${ing.status || ''} · ${(ing.counts && (ing.counts.orders || ing.counts.photos)) ? (ing.counts.orders || 0) + ' заявок' : ''}` : 'ожидаем ночной D‑2';
+      const days = s.available_days || [];
+      el('navDays').textContent = String(days.length);
+      const c = s.counts || {};
+      const parts = [];
+      if (c.not_in_work) parts.push(`не в работе: ${c.not_in_work}`);
+      if (c.failed_shift) parts.push(`смена не вышла: ${c.failed_shift}`);
+      if (c.not_checked) parts.push(`не проверяется: ${c.not_checked}`);
+      if (c.compared_with_human != null) parts.push(`сверка: ${c.agreed_with_human || 0}/${c.compared_with_human} (только с акцептом)`);
+      if (days.length) parts.push(`в архиве ${days.length} дн. · ingest ${ing?.day || '—'}`);
+      else parts.push('база чистая — первый D‑2 ночью (01:00 Самара)');
+      el('monitorInfo').textContent = parts.join(' · ');
+      fillDiffs(el('mDiffs'), s.recent_diffs);
+      fillEvents(el('mEvents'), s.recent_events);
+    }
+
+    function renderDay(s) {
+      const f = s.filter || {};
+      if (f.day) el('rangeHint').textContent = `фильтр: день ${f.day}`;
+      else if (f.date_from || f.date_to) el('rangeHint').textContent = `фильтр: ${f.date_from || '…'} → ${f.date_to || '…'}`;
+      else el('rangeHint').textContent = 'фильтр: все дни';
+      el('dCompared').textContent = s.counts?.compared_with_human ?? '—';
+      el('dPending').textContent = s.counts?.human_pending ?? '—';
+      el('dDone').textContent = s.counts?.processed ?? '—';
+      el('dAgree').textContent = s.agreement_pct == null ? 'n/a' : (s.agreement_pct + '%');
+      el('dProductivity').textContent =
+        s.labor_productivity_pct == null ? 'n/a' : (s.labor_productivity_pct + '%');
+      fillDiffs(el('dDiffs'), s.recent_diffs);
+      fillResults(el('dResults'), s.recent_results);
+      el('dItog').innerHTML = ((s.itog_distribution || []).map(x => {
+        const sub = x.itog === 'НАРУШЕНИЕ (фото)'
+          ? `<div class="muted" style="font-size:11px">по содержанию фото: ${s.counts?.photo_by_content ?? '—'} · только ГЕО/трек: ${s.counts?.photo_by_geo_only ?? '—'}</div>`
+          : '';
+        return `<tr><td><span class="badge ${badgeForItog(x.itog)}">${x.itog}</span>${sub}</td><td class="mono">${x.n}</td></tr>`;
+      }).join('')) || '<tr><td colspan="2" class="empty">—</td></tr>';
+      fillEvents(el('dEvents'), s.recent_events);
+    }
+
+    function renderVision(s) {
+      const costs = s.costs || {};
+      const f = s.filter || {};
+      el('vCost').textContent = costs.cost_usd == null ? '—' : ('$' + Number(costs.cost_usd).toFixed(4));
+      el('vCalls').textContent = costs.vision_calls ?? '—';
+      el('vTokens').textContent = costs.total_tokens ?? '—';
+      el('vSplit').textContent = `${costs.prompt_tokens ?? 0} / ${costs.completion_tokens ?? 0}`;
+      el('vRange').textContent = f.day ? `день ${f.day}` : ((f.date_from || f.date_to) ? `${f.date_from || '…'} → ${f.date_to || '…'}` : 'все дни');
+      el('vDays').innerHTML = (costs.by_day || []).map(x => `
+        <tr>
+          <td class="mono">${x.day || ''}</td>
+          <td class="mono">${x.vision_calls}</td>
+          <td class="mono">${x.total_tokens}</td>
+          <td class="mono">$${Number(x.cost_usd || 0).toFixed(4)}</td>
+        </tr>`).join('') || '<tr><td colspan="4" class="empty">нет vision-затрат в диапазоне</td></tr>';
+    }
+
+    function renderSystem(s, health) {
+      el('sysHealth').innerHTML = health?.ok
+        ? '<span class="badge badge-ok">ok</span>'
+        : '<span class="badge badge-bad">fail</span>';
+      el('sysMode').textContent = s.mode || health?.mode || '—';
+      const ar = s.active_run;
+      el('sysRun').textContent = ar
+        ? `${ar.day || ''} · ${ar.status || ''} · ${String(ar.note || '').slice(0,40)}`
+        : 'нет';
+    }
+
+    async function fetchDaySummary(day) {
+      if (archiveCache[day]) return archiveCache[day];
+      const s = await (await fetch(statusUrl({ day, date_from: '', date_to: '' }), { cache: 'no-store' })).json();
+      archiveCache[day] = {
+        day,
+        processed: s.counts?.processed ?? 0,
+        agree: s.agreement_pct,
+        cost: s.costs?.cost_usd ?? 0,
+        calls: s.costs?.vision_calls ?? 0,
+        orders: s.last_ingest?.counts?.orders ?? s.counts?.results ?? 0,
+        status: s.last_ingest?.status || (s.counts?.processed ? 'ready' : '—'),
+      };
+      return archiveCache[day];
+    }
+
+    async function renderArchive() {
+      // Список дней всегда без фильтра day/date_from — иначе при открытом дне
+      // в архиве остаётся только он (баг available_days).
+      let days = (cacheStatus?.available_days || []).slice();
+      try {
+        const all = await (await fetch('/api/status', { cache: 'no-store' })).json();
+        if (all.available_days?.length) {
+          days = all.available_days.slice();
+          if (cacheStatus) cacheStatus.available_days = days;
+        }
+      } catch (_) { /* keep cacheStatus */ }
+      days = days.sort().reverse();
+      el('navDays').textContent = String(days.length);
+      if (!days.length) {
+        el('archiveBody').innerHTML = '';
+        el('archiveEmpty').style.display = 'block';
+        return;
+      }
+      el('archiveEmpty').style.display = 'none';
+      el('archiveBody').innerHTML = '<tr><td colspan="6" class="empty">загрузка…</td></tr>';
+      const rows = [];
+      for (const day of days.slice(0, 60)) {
+        try { rows.push(await fetchDaySummary(day)); }
+        catch { rows.push({ day, processed: '—', agree: null, cost: 0, orders: '—', status: 'err' }); }
+      }
+      el('archiveBody').innerHTML = rows.map(r => `
+        <tr class="clickable" data-day="${r.day}">
+          <td class="mono">${r.day}</td>
+          <td class="mono">${r.orders}</td>
+          <td class="mono">${r.processed}</td>
+          <td class="mono">${r.agree == null ? 'n/a' : (r.agree + '%')}</td>
+          <td class="mono">$${Number(r.cost || 0).toFixed(4)}</td>
+          <td><span class="badge ${r.status === 'done' || r.status === 'ready' ? 'badge-ok' : 'badge-info'}">${r.status}</span></td>
+        </tr>`).join('');
+      el('archiveBody').querySelectorAll('tr.clickable').forEach(tr => {
+        tr.onclick = () => {
+          filter = { day: tr.dataset.day, date_from: '', date_to: '' };
+          el('day').value = filter.day;
+          el('dateFrom').value = '';
+          el('dateTo').value = '';
+          el('shiftDay').value = filter.day;
+          setView('day');
+          tick();
+        };
+      });
+    }
+
+    async function loadShifts() {
+      const day = el('shiftDay').value || filter.day || daysAgo(2);
+      el('shiftDay').value = day;
+      try {
+        const s = await (await fetch(`/api/schedules?day=${encodeURIComponent(day)}&limit=500`, { cache: 'no-store' })).json();
+        const items = s.items || [];
+        el('shiftCount').textContent = `(${s.total ?? items.length})`;
+        if (!items.length) {
+          el('shiftBody').innerHTML = '';
+          el('shiftEmpty').style.display = 'block';
+          return;
+        }
+        el('shiftEmpty').style.display = 'none';
+        el('shiftBody').innerHTML = items.map(x => `
+          <tr>
+            <td class="mono">${x.schedule_id}</td>
+            <td>${x.plate || '—'} <span class="muted mono">${x.vehicle_id || ''}</span></td>
+            <td><span class="badge badge-info">${x.state || '—'}</span></td>
+            <td class="mono muted">${(x.start_at || '').toString().slice(0,16)} → ${(x.finish_at || '').toString().slice(11,16)}</td>
+            <td class="mono muted">${(x.started_at || '').toString().slice(0,16)} → ${(x.finished_at || '').toString().slice(11,16)}</td>
+            <td class="mono">${x.route_id || '—'}</td>
+            <td class="mono">${x.mileage ?? '—'}</td>
+          </tr>`).join('');
+      } catch (e) {
+        el('shiftBody').innerHTML = '';
+        el('shiftEmpty').style.display = 'block';
+        el('shiftEmpty').textContent = 'Не удалось загрузить /api/schedules (эндпоинт или день без данных).';
+      }
+    }
+
+    async function tick() {
+      try {
+        const [s, health] = await Promise.all([
+          (await fetch(statusUrl(), { cache: 'no-store' })).json(),
+          (await fetch('/api/health', { cache: 'no-store' })).json().catch(() => null),
+        ]);
+        cacheStatus = s;
+        renderMonitor(s);
+        renderDay(s);
+        renderVision(s);
+        renderSystem(s, health);
+        if (view === 'archive') renderArchive();
+      } catch (e) {
+        el('mState').textContent = 'unreachable';
+        el('mDot').className = 'dot error';
+        el('sysHealth').innerHTML = '<span class="badge badge-bad">unreachable</span>';
+      }
+    }
+
     function applyFromInputs() {
       const day = el('day').value;
       const df = el('dateFrom').value;
@@ -176,79 +783,41 @@
       syncUrl();
       tick();
     }
+
+    // init inputs
+    if (filter.day) el('day').value = filter.day;
+    if (filter.date_from) el('dateFrom').value = filter.date_from;
+    if (filter.date_to) el('dateTo').value = filter.date_to;
+    el('shiftDay').value = filter.day || daysAgo(2);
+
+    document.querySelectorAll('.nav-item').forEach(b => {
+      b.onclick = () => setView(b.dataset.view);
+    });
     el('apply').onclick = applyFromInputs;
-    el('today').onclick = () => { filter = { day: iso(new Date()), date_from:'', date_to:'' }; el('day').value=filter.day; el('dateFrom').value=''; el('dateTo').value=''; syncUrl(); tick(); };
-    el('dby').onclick = () => { filter = { day: daysAgo(2), date_from:'', date_to:'' }; el('day').value=filter.day; el('dateFrom').value=''; el('dateTo').value=''; syncUrl(); tick(); };
-    el('all').onclick = () => { filter = { day:'', date_from:'', date_to:'' }; el('day').value=''; el('dateFrom').value=''; el('dateTo').value=''; syncUrl(); tick(); };
+    el('today').onclick = () => {
+      filter = { day: iso(new Date()), date_from: '', date_to: '' };
+      el('day').value = filter.day; el('dateFrom').value = ''; el('dateTo').value = '';
+      syncUrl(); tick();
+    };
+    el('dby').onclick = () => {
+      filter = { day: daysAgo(2), date_from: '', date_to: '' };
+      el('day').value = filter.day; el('dateFrom').value = ''; el('dateTo').value = '';
+      syncUrl(); tick();
+    };
+    el('all').onclick = () => {
+      filter = { day: '', date_from: '', date_to: '' };
+      el('day').value = ''; el('dateFrom').value = ''; el('dateTo').value = '';
+      syncUrl(); tick();
+    };
+    el('gotoDby').onclick = () => {
+      filter = { day: daysAgo(2), date_from: '', date_to: '' };
+      el('day').value = filter.day;
+      setView('day'); tick();
+    };
+    el('refreshAll').onclick = () => { archiveCache = {}; tick(); };
+    el('shiftApply').onclick = loadShifts;
 
-    function statusUrl() {
-      const p = new URLSearchParams();
-      if (filter.day) p.set('day', filter.day);
-      if (filter.date_from) p.set('date_from', filter.date_from);
-      if (filter.date_to) p.set('date_to', filter.date_to);
-      const q = p.toString();
-      return '/api/status' + (q ? ('?' + q) : '');
-    }
-
-    async function tick() {
-      try {
-        const s = await (await fetch(statusUrl(), {cache:'no-store'})).json();
-        const st = s.agent_state || 'idle';
-        el('state').textContent = st + (s.mode ? ` · ${s.mode}` : '');
-        el('dot').className = 'dot ' + st;
-        el('queued').textContent = s.counts.queued;
-        el('progress').textContent = s.counts.in_progress;
-        el('done').textContent = s.counts.processed;
-        el('errors').textContent = s.counts.errors;
-        el('agree').textContent = s.agreement_pct == null ? 'n/a' : (s.agreement_pct + '%');
-        el('compared').textContent = s.counts.compared_with_human;
-        el('pending').textContent = s.counts.human_pending;
-        const costs = s.costs || {};
-        el('costUsd').textContent = (costs.cost_usd == null) ? '—' : ('$' + Number(costs.cost_usd).toFixed(4));
-        el('visionCalls').textContent = costs.vision_calls ?? '—';
-        el('tokens').textContent = costs.total_tokens ?? '—';
-        el('tokSplit').textContent = `${costs.prompt_tokens ?? 0} / ${costs.completion_tokens ?? 0}`;
-        const f = s.filter || {};
-        if (f.day) el('rangeHint').textContent = `фильтр: день ${f.day}`;
-        else if (f.date_from || f.date_to) el('rangeHint').textContent = `фильтр: ${f.date_from || '…'} → ${f.date_to || '…'}`;
-        else el('rangeHint').textContent = 'фильтр: все дни';
-        const ing = s.last_ingest;
-        el('ingest').textContent = ing ? `${ing.day || ''} · ${ing.status || ''}` : 'нет';
-        el('diffs').innerHTML = (s.recent_diffs || []).map(x => `
-          <tr>
-            <td class="mono">${x.day || ''}</td>
-            <td class="mono">${x.order_id}</td>
-            <td>${x.agent_itog || ''}</td>
-            <td>${x.human_breach_state || '—'}</td>
-            <td class="mono">${x.diff_reason || ''}</td>
-          </tr>`).join('') || '<tr><td colspan="5">нет расхождений / мало сверки</td></tr>';
-        el('results').innerHTML = (s.recent_results || []).map(x => `
-          <tr>
-            <td class="mono">${x.order_id}</td>
-            <td>${x.agent_verdict || ''}</td>
-            <td>${x.human_verdict || '—'}</td>
-            <td class="mono">${x.match_flag == null ? '—' : x.match_flag}</td>
-          </tr>`).join('') || '<tr><td colspan="4">—</td></tr>';
-        el('itog').innerHTML = (s.itog_distribution || []).map(x => `
-          <tr><td>${x.itog}</td><td class="mono">${x.n}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>';
-        el('costDays').innerHTML = (costs.by_day || []).map(x => `
-          <tr>
-            <td class="mono">${x.day || ''}</td>
-            <td class="mono">${x.vision_calls}</td>
-            <td class="mono">${x.total_tokens}</td>
-            <td class="mono">$${Number(x.cost_usd || 0).toFixed(4)}</td>
-          </tr>`).join('') || '<tr><td colspan="4">нет vision-затрат в диапазоне</td></tr>';
-        el('events').innerHTML = (s.recent_events || []).map(x => `
-          <tr>
-            <td class="mono">${(x.ts || '').toString().slice(11,19)}</td>
-            <td>${x.level}</td>
-            <td>${x.message}</td>
-          </tr>`).join('');
-      } catch (e) {
-        el('state').textContent = 'unreachable';
-        el('dot').className = 'dot error';
-      }
-    }
+    setView(view);
     tick();
     setInterval(tick, 2000);
   </script>

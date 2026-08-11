@@ -1,8 +1,9 @@
 [Unit]
-Description=Daily timer for Agent1 shadow ingest
+Description=Daily timer for Agent1 shadow ingest (D-2 at 01:00 Samara)
 
 [Timer]
-OnCalendar=*-*-* 06:30:00
+# 01:00 local Samara / Yekaterinburg (= UTC+4)
+OnCalendar=*-*-* 01:00:00 Asia/Yekaterinburg
 Persistent=true
 Unit=agent1-daily.service
 

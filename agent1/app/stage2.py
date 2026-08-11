@@ -1,4 +1,4 @@
-"""Stage2 checklist routing + optional vision + photo-verdict (TZ §6 / §7.2)."""
+"""Stage2 checklist routing + optional vision; photo-verdict is programmatic (TZ §6.5)."""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,16 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from checklist_prompts import questions_for
+from checklist_verdict import (
+    CODES,
+    compute_photo_verdict,
+    is_vision_blind,
+    normalize_answers,
+    soften_o3,
+    to_internal_answers,
+)
+from photo_meta import prepare_image_for_vision, shot_time_label, sort_photos_by_shot_time
 from s3_photos import cache_photo, s3_configured
 
 
@@ -29,9 +39,37 @@ class PhotoVerdict(str, Enum):
 
 VISION_URL = os.environ.get("AGENT1_VISION_URL", "").rstrip("/")
 VISION_API_KEY = os.environ.get("AGENT1_VISION_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+# Default: gpt-4o-mini (дешёвый). Для точности на сложных заявках:
+#   AGENT1_VISION_MODEL=gpt-4.1  или  gpt-5.4-mini
+# На A/B 03.08 новый промпт (А3→«смотри ПОСЛЕ») дал А3=1 у 12/12 бывших нулей уже на mini;
+# gpt-4.1 был сопоставим (~3× дороже). Каскад 4.1 — следующий шаг к 90%.
 VISION_MODEL = os.environ.get("AGENT1_VISION_MODEL", "gpt-4o-mini")
 VISION_ENABLED = os.environ.get("AGENT1_VISION_ENABLED", "auto").lower()
-# USD per 1M tokens (gpt-4o-mini defaults; override via env)
+# low|high|auto — low достаточно при пометках ДО/ПОСЛЕ; high — если А3 снова проседает
+VISION_DETAIL = os.environ.get("AGENT1_VISION_DETAIL", "low").lower()
+
+# Greta marks each frame; without this the model has to guess which shot is «после».
+# Для невывоза вывоза не было — там «ПОСЛЕ вывоза» уводит модель в «помеха уже убрана».
+PTYPE_LABELS = {
+    "site_before": "ДО вывоза",
+    "site_after": "ПОСЛЕ вывоза",
+}
+PTYPE_LABELS_NO_REMOVAL = {
+    "site_before": "по прибытии на точку",
+    "site_after": "перед отъездом с точки",
+}
+
+
+FALLBACK_NOTE = (
+    "Если вопрос неприменим — ответь 0; "
+    "для О3, А4, С5, Б5, Н5 и Н6 неприменимость — это 1 (позитивная полярность)."
+)
+
+
+def frame_label(checklist: str, ptype: Any) -> str:
+    labels = PTYPE_LABELS_NO_REMOVAL if str(checklist) == "2" else PTYPE_LABELS
+    return labels.get(str(ptype or ""), "")
+# USD per 1M tokens (defaults for gpt-4o-mini; set env when switching model)
 VISION_INPUT_PER_M = float(os.environ.get("AGENT1_VISION_INPUT_USD_PER_M", "0.15"))
 VISION_OUTPUT_PER_M = float(os.environ.get("AGENT1_VISION_OUTPUT_USD_PER_M", "0.60"))
 
@@ -42,6 +80,11 @@ def estimate_cost_usd(prompt_tokens: int, completion_tokens: int) -> float:
         + (completion_tokens / 1_000_000.0) * VISION_OUTPUT_PER_M,
         6,
     )
+
+# Greta Site.stype: ровно два значения (UI / CSV).
+# DB enum: containers → «Контейнерная площадка», scheduled → «Сигнальный метод».
+SITE_SIGNAL = frozenset({"сигнальный метод", "scheduled"})
+
 
 def route_checklist(*, state: str, waste_type: str, site_type: str) -> Checklist | None:
     state_l = (state or "").strip().lower()
@@ -54,10 +97,11 @@ def route_checklist(*, state: str, waste_type: str, site_type: str) -> Checklist
         return Checklist.RSO
     if waste in {"КГО", "KGO"}:
         return Checklist.KGO
-    # Greta DB: containers = КП, scheduled = сигнальный метод / МКД
-    if site in {"scheduled", "signal"} or "сигнал" in site:
+    # 1б только для «Сигнальный метод» (не путать с schedule_id)
+    if site in SITE_SIGNAL:
         return Checklist.SIGNAL
-    if state_l in {"done", "completed"} or "выполн" in state_l:
+    if state_l in {"done", "completed", "retry"} or "выполн" in state_l:
+        # «Контейнерная площадка» и любой иной/пустой тип → 1а
         return Checklist.KP
     return None
 
@@ -72,6 +116,7 @@ def route_checklist_for_accept(
     if state_l not in {
         "done",
         "completed",
+        "retry",  # TZ §5.4: judge as final done
         "canceled_by_driver",
         "cancelled_by_driver",
     } and "выполн" not in state_l and "отменена водителем" not in state_l:
@@ -103,37 +148,64 @@ def _parse_vision_json(text: str) -> dict[str, Any]:
         return {"raw": text}
 
 
-def call_vision(checklist: Checklist, photo_paths: list[Path], meta: dict[str, Any]) -> dict[str, Any]:
-    """Call OpenAI-compatible vision chat; returns structured answers + photo_verdict + usage."""
+def call_vision(
+    checklist: Checklist,
+    photo_items: list[dict[str, Any]],
+    meta: dict[str, Any],
+) -> dict[str, Any]:
+    """Call vision for 0/1 answers only; photo_verdict is computed by program (TZ §6.5).
+
+    photo_items: chronologic [{path: Path, time: "ЧЧ:ММ:СС"|None}] — time from filename
+    (errors doc §1: Greta DB «Время» is unreliable; on-image stamp unreadable by model).
+    MIME sniffed by content, EXIF orientation applied (errors doc §2, §4).
+    """
     import base64
+    import time
+
     import httpx
 
     if not VISION_API_KEY:
         raise RuntimeError("VISION_API_KEY not set")
 
+    codes = ", ".join(CODES.get(checklist.value, ()))
     parts: list[dict[str, Any]] = [
         {
             "type": "text",
             "text": (
-                f"Чек-лист {checklist.value}. Заявка {meta.get('order_id')}. "
+                f"Заявка {meta.get('order_id')}. "
                 f"Адрес: {meta.get('site_address') or '—'}. "
                 f"Тип отходов: {meta.get('waste_type_name') or '—'}. "
                 f"Тип точки: {meta.get('site_stype') or '—'}. "
                 f"Состояние: {meta.get('state') or '—'}. "
                 f"Причина отмены: {meta.get('fail_reason') or '—'}. "
-                f"Комментарий: {meta.get('report_comment') or '—'}.\n"
-                "Ответь СТРОГО JSON: "
-                '{"answers":{"О1":0|1,...},"photo_verdict":"ПОДТВЕРЖДЕНО|НАРУШЕНИЕ|НЕСООТВЕТСТВИЕ ТИПА",'
-                '"za_chto":"...","pometki":"...","comment":"..."}'
+                f"Комментарий: {meta.get('report_comment') or '—'}.\n\n"
+                "Снимки идут в хронологическом порядке; время съёмки каждого указано текстом перед ним. "
+                "Хронологию определяй ТОЛЬКО по этому времени.\n\n"
+                f"{questions_for(checklist.value)}\n\n"
+                "НЕ выноси общий вердикт. Только ответы на вопросы.\n"
+                f"Ответь СТРОГО JSON: "
+                f'{{"answers":{{{codes} as 0|1 (А6 — число)}},"comment":"кратко"}}\n'
+                f"{FALLBACK_NOTE}"
             ),
         }
     ]
-    for p in photo_paths[:8]:
-        data = base64.b64encode(p.read_bytes()).decode("ascii")
-        mime = "image/jpeg"
-        if p.suffix.lower() in {".png"}:
-            mime = "image/png"
-        parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}})
+    for idx, item in enumerate(photo_items[:8], start=1):
+        p: Path = item["path"]
+        t = item.get("time")
+        kind = frame_label(checklist.value, item.get("kind"))
+        label = f"Снимок {idx}"
+        if kind:
+            label += f" — {kind}"
+        label += f", снят в {t}." if t else ", время съёмки неизвестно."
+        parts.append({"type": "text", "text": label})
+        img_bytes, mime = prepare_image_for_vision(p)
+        data = base64.b64encode(img_bytes).decode("ascii")
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{data}", "detail": VISION_DETAIL},
+            }
+        )
 
     base = VISION_URL or "https://api.openai.com/v1"
     headers = {"Authorization": f"Bearer {VISION_API_KEY}", "Content-Type": "application/json"}
@@ -143,33 +215,78 @@ def call_vision(checklist: Checklist, photo_paths: list[Path], meta: dict[str, A
         "temperature": 0,
         "response_format": {"type": "json_object"},
     }
+    max_retries = int(os.environ.get("AGENT1_VISION_RETRIES", "5"))
+    payload: dict[str, Any] = {}
     with httpx.Client(timeout=120.0) as client:
-        r = client.post(f"{base}/chat/completions", headers=headers, json=body)
-        r.raise_for_status()
-        payload = r.json()
+        last_exc: Exception | None = None
+        for attempt in range(max_retries):
+            r = client.post(f"{base}/chat/completions", headers=headers, json=body)
+            if r.status_code == 429:
+                ra = r.headers.get("retry-after")
+                wait = float(ra) if ra and ra.isdigit() else min(60.0, 5.0 * (2**attempt))
+                print(f"vision 429 order={meta.get('order_id')} wait={wait}s attempt={attempt+1}", flush=True)
+                time.sleep(wait)
+                last_exc = httpx.HTTPStatusError("429", request=r.request, response=r)
+                continue
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                if r.status_code >= 500 and attempt + 1 < max_retries:
+                    time.sleep(min(30.0, 2.0 * (2**attempt)))
+                    continue
+                raise
+            payload = r.json()
+            break
+        else:
+            if last_exc:
+                raise last_exc
+            raise RuntimeError("vision request failed without response")
         content = payload["choices"][0]["message"]["content"]
         usage = payload.get("usage") or {}
     parsed = _parse_vision_json(content)
-    verdict = str(parsed.get("photo_verdict") or PhotoVerdict.PENDING.value)
+    answers = parsed.get("answers") or {}
+    model_comment = str(parsed.get("comment") or "")
     prompt_t = int(usage.get("prompt_tokens") or 0)
     completion_t = int(usage.get("completion_tokens") or 0)
     total_t = int(usage.get("total_tokens") or (prompt_t + completion_t))
     cost_usd = estimate_cost_usd(prompt_t, completion_t)
+    usage_block = {
+        "prompt_tokens": prompt_t,
+        "completion_tokens": completion_t,
+        "total_tokens": total_t,
+        "cost_usd": cost_usd,
+    }
+    # Errors doc §3: model did not actually look (empty/«нет изображений») → human, not verdict.
+    # Checked on raw answers: all-zero must not become О3=1 after polarity flip.
+    if is_vision_blind(status="ok", answers=answers, comment=model_comment):
+        return {
+            "status": "blind",
+            "checklist": checklist.value,
+            "photo_verdict": PhotoVerdict.PENDING.value,
+            "reason": "model_did_not_inspect",
+            "comment": model_comment,
+            "answers": answers,
+            "model": VISION_MODEL,
+            "usage": usage_block,
+        }
+    raw_norm = normalize_answers(answers)
+    softened = soften_o3(answers, model_comment)
+    internal = to_internal_answers(softened)
+    computed = compute_photo_verdict(checklist.value, internal, comment=model_comment)
     return {
         "status": "ok",
         "checklist": checklist.value,
-        "photo_verdict": verdict,
-        "za_chto": parsed.get("za_chto") or "",
-        "pometki": parsed.get("pometki") or "",
-        "comment": parsed.get("comment") or "",
-        "answers": parsed.get("answers") or {},
+        "photo_verdict": computed.photo_verdict,
+        "za_chto": computed.za_chto,
+        "pometki": computed.pometki,
+        "comment": computed.comment,
+        "answers": internal,
+        "answers_model": answers,
+        "o3_softened": raw_norm.get("О3") == 0 and softened.get("О3") == 1,
+        "verdict_source": "program",
         "model": VISION_MODEL,
-        "usage": {
-            "prompt_tokens": prompt_t,
-            "completion_tokens": completion_t,
-            "total_tokens": total_t,
-            "cost_usd": cost_usd,
-        },
+        "usage": usage_block,
     }
 
 
@@ -193,9 +310,12 @@ def run_stage2(payload: dict[str, Any], photos: list[dict[str, Any]]) -> dict[st
         }
 
     day = str(payload.get("day") or "")
+    # Chronologic order by capture time from filename (errors doc §1; DB «Время» unreliable)
+    ordered = sort_photos_by_shot_time(list(photos))
     cached: list[Path] = []
+    photo_items: list[dict[str, Any]] = []
     errors: list[str] = []
-    for ph in photos:
+    for ph in ordered:
         key = ph.get("blob_key")
         url = ph.get("photo_url")
         if not key and not url:
@@ -210,6 +330,13 @@ def run_stage2(payload: dict[str, Any], photos: list[dict[str, Any]]) -> dict[st
             if path:
                 cached.append(path)
                 ph["cached_path"] = str(path)
+                photo_items.append(
+                    {
+                        "path": path,
+                        "time": shot_time_label(str(ph.get("filename") or "")),
+                        "kind": ph.get("ptype"),
+                    }
+                )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{key or url}:{exc}")
 
@@ -243,7 +370,7 @@ def run_stage2(payload: dict[str, Any], photos: list[dict[str, Any]]) -> dict[st
         return base
 
     try:
-        result = call_vision(checklist, cached, payload)
+        result = call_vision(checklist, photo_items, payload)
         result.update({k: base[k] for k in ("photos_cached", "photos_total", "s3_configured")})
         return result
     except Exception as exc:  # noqa: BLE001

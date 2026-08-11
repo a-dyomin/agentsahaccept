@@ -29,7 +29,8 @@ def route_checklist(
         return Checklist.RSO
     if waste in {"КГО", "KGO"}:
         return Checklist.KGO
-    if "сигнал" in site or site in {"signal", "сигнальный метод"}:
+    # Greta: «Сигнальный метод» (UI) / scheduled (DB enum). Второе значение — «Контейнерная площадка»/containers → 1а.
+    if site in {"сигнальный метод", "scheduled"}:
         return Checklist.SIGNAL
     if "выполн" in state_l or state_l in {"done", "completed"}:
         return Checklist.KP

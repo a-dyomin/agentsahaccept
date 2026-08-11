@@ -124,8 +124,9 @@ def s3_smoke() -> dict[str, Any]:
 
 @app.get("/api/accept/day/{day}")
 def accept_day(day: str) -> dict[str, Any]:
-    """Acceptance test vs TZ gold numbers for a day (default target: 2026-07-12)."""
-    from accept_test import checklist_breakdown, compare_counts
+    """Acceptance test vs TZ gold numbers. Gold day is 2026-07-12 only (errors doc §5):
+    for other days numbers are shown as reference and never marked failed."""
+    from accept_test import GOLD_DAY, checklist_breakdown, compare_counts
 
     with db() as conn:
         snap = fetch_one(
@@ -147,15 +148,20 @@ def accept_day(day: str) -> dict[str, Any]:
         counts = json.loads(counts)
     count_check = compare_counts(counts)
     cl_check = checklist_breakdown([dict(o) for o in orders])
+    is_gold = day == GOLD_DAY
     return {
         "day": day,
+        "gold_day": GOLD_DAY,
+        "comparable": is_gold,
         "exported_at": snap.get("exported_at").isoformat()
         if hasattr(snap.get("exported_at"), "isoformat")
         else snap.get("exported_at"),
         "counts": counts,
         "count_check": count_check,
         "checklist_check": cl_check,
-        "ok": bool(count_check["ok"] and cl_check["ok"]),
+        # only the gold day may fail; other days are reference-only
+        "ok": bool(count_check["ok"] and cl_check["ok"]) if is_gold else True,
+        "note": None if is_gold else f"контрольные числа относятся к {GOLD_DAY}; для {day} — справочно",
     }
 
 
@@ -222,9 +228,11 @@ def status(day: str | None = None, date_from: str | None = None, date_to: str | 
             last_result = fetch_all(
                 conn,
                 "SELECT ad.order_id, ad.itog AS agent_verdict, c.human_breach_state AS human_verdict, "
-                "c.match_flag, ad.created_at "
+                "c.match_flag, ad.za_chto, ad.pometki, ad.created_at, "
+                "o.site_address, o.provider_name "
                 "FROM agent_decisions ad "
                 "LEFT JOIN comparisons c ON c.day=ad.day AND c.order_id=ad.order_id "
+                "LEFT JOIN orders_day o ON o.day=ad.day AND o.order_id=ad.order_id "
                 "WHERE ad.day >= %s::date AND ad.day <= %s::date "
                 "ORDER BY ad.created_at DESC LIMIT 10",
                 (d_from, d_to),
@@ -248,11 +256,6 @@ def status(day: str | None = None, date_from: str | None = None, date_to: str | 
                 "GROUP BY day ORDER BY day",
                 (d_from, d_to),
             )
-            days_list = fetch_all(
-                conn,
-                "SELECT day FROM ingest_snapshots WHERE day >= %s::date AND day <= %s::date ORDER BY day",
-                (d_from, d_to),
-            )
         else:
             last_ingest = fetch_one(
                 conn,
@@ -270,8 +273,13 @@ def status(day: str | None = None, date_from: str | None = None, date_to: str | 
             )
             last_result = fetch_all(
                 conn,
-                "SELECT order_id, agent_verdict, human_verdict, match_flag, created_at "
-                "FROM results ORDER BY created_at DESC LIMIT 10",
+                "SELECT ad.order_id, ad.itog AS agent_verdict, c.human_breach_state AS human_verdict, "
+                "c.match_flag, ad.za_chto, ad.pometki, ad.created_at, "
+                "o.site_address, o.provider_name "
+                "FROM agent_decisions ad "
+                "LEFT JOIN comparisons c ON c.day=ad.day AND c.order_id=ad.order_id "
+                "LEFT JOIN orders_day o ON o.day=ad.day AND o.order_id=ad.order_id "
+                "ORDER BY ad.created_at DESC LIMIT 10",
             )
             costs = fetch_one(
                 conn,
@@ -288,13 +296,62 @@ def status(day: str | None = None, date_from: str | None = None, date_to: str | 
                 "COALESCE(SUM(cost_usd),0) AS cost_usd "
                 "FROM vision_usage GROUP BY day ORDER BY day DESC LIMIT 14",
             )
-            days_list = fetch_all(
-                conn, "SELECT day FROM ingest_snapshots ORDER BY day DESC LIMIT 60"
-            )
+
+        # Архив дней всегда полный: не сужаем available_days фильтром day/date_from/date_to.
+        days_list = fetch_all(
+            conn, "SELECT day FROM ingest_snapshots ORDER BY day DESC LIMIT 60"
+        )
 
     compared = int(cmp_total) - int(cmp_pending) if cmp_total else 0
     agreement = (
         round(100.0 * int(cmp_matched) / compared, 1) if compared else None
+    )
+
+    # «НАРУШЕНИЕ (фото)» смешивает провал ГЕО (Этап 1) и претензии к самим кадрам.
+    # Для отчётности разводим: za_chto с «фото:» — содержание, без него — только ГЕО/график.
+    with db() as conn:
+        if d_from and d_to:
+            photo_split = fetch_one(
+                conn,
+                "SELECT COUNT(*) FILTER (WHERE za_chto LIKE '%%фото:%%')::int AS content, "
+                "COUNT(*) FILTER (WHERE za_chto NOT LIKE '%%фото:%%')::int AS geo_only "
+                "FROM agent_decisions WHERE itog='НАРУШЕНИЕ (фото)' "
+                "AND day >= %s::date AND day <= %s::date",
+                (d_from, d_to),
+            )
+        else:
+            photo_split = fetch_one(
+                conn,
+                "SELECT COUNT(*) FILTER (WHERE za_chto LIKE '%%фото:%%')::int AS content, "
+                "COUNT(*) FILTER (WHERE za_chto NOT LIKE '%%фото:%%')::int AS geo_only "
+                "FROM agent_decisions WHERE itog='НАРУШЕНИЕ (фото)'",
+            )
+
+    # Coverage / special buckets from agent_decisions
+    not_in_work = 0
+    failed_shift = 0
+    not_checked = 0
+    auto_checked = 0
+    sent_to_human = 0
+    for row in itog_dist or []:
+        it = str(row.get("itog") or "")
+        n = int(row.get("n") or 0)
+        if it == "НЕ ВЗЯТА В РАБОТУ":
+            not_in_work = n
+        elif it == "СМЕНА НЕ ВЫШЛА":
+            failed_shift = n
+        elif it == "НЕ ПРОВЕРЯЕТСЯ":
+            not_checked = n
+        elif it == "К ЧЕЛОВЕКУ":
+            sent_to_human = n
+        elif it == "ЧИСТО" or it.startswith("НАРУШЕНИЕ"):
+            auto_checked += n
+
+    # «Производительность труда»: доля акцептов, по которым агент сам вынес
+    # конечное решение. Служебные/out-of-scope статусы в знаменатель не входят.
+    labor_scope = auto_checked + sent_to_human
+    labor_productivity = (
+        round(100.0 * auto_checked / labor_scope, 1) if labor_scope else None
     )
 
     active = None
@@ -341,8 +398,24 @@ def status(day: str | None = None, date_from: str | None = None, date_to: str | 
             "compared_with_human": compared,
             "agreed_with_human": int(cmp_matched),
             "human_pending": int(cmp_pending),
+            "not_in_work": not_in_work,
+            "failed_shift": failed_shift,
+            "not_checked": not_checked,
+            "photo_by_content": int((photo_split or {}).get("content") or 0),
+            "photo_by_geo_only": int((photo_split or {}).get("geo_only") or 0),
+            "auto_checked": auto_checked,
+            "sent_to_human": sent_to_human,
         },
         "agreement_pct": agreement,
+        "labor_productivity_pct": labor_productivity,
+        "labor_productivity_scope": (
+            "авторешения / (авторешения + К ЧЕЛОВЕКУ); "
+            "служебные и out-of-scope статусы исключены"
+        ),
+        "agreement_scope": (
+            "только заявки с human-акцептом (match_flag не NULL); "
+            "done без акцепта не входят — KPI в основном по невывозам"
+        ),
         "costs": cost_block,
         "itog_distribution": _ser_rows(itog_dist),
         "recent_diffs": _ser_rows(diffs),
@@ -393,7 +466,7 @@ def ingest_day(day: str, background_tasks: BackgroundTasks, enqueue: bool = True
 @app.post("/api/ingest/day/{day}/sync")
 def ingest_day_sync(day: str, enqueue: bool = True) -> dict[str, Any]:
     """Synchronous ingest (for first bring-up / debugging)."""
-    from ingest import ingest_and_enqueue, persist_export, pull_day_json, ensure_schema, enqueue_stage1
+    from ingest import persist_export, pull_day_json, ensure_schema, enqueue_stage1
 
     ensure_schema()
     set_state("ingesting")
@@ -406,6 +479,44 @@ def ingest_day_sync(day: str, enqueue: bool = True) -> dict[str, Any]:
     else:
         set_state("idle")
     return result
+
+
+@app.post("/api/enrich/schedules/{day}")
+def enrich_schedules(day: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """Light pull of Greta Schedule (ID смены) + photo.schedule_id — no Wialon."""
+
+    def _job() -> None:
+        from ingest import enrich_schedules_day
+
+        try:
+            stats = enrich_schedules_day(day)
+            log_event("info", f"schedules enrich day={day} {stats}")
+        except Exception as exc:  # noqa: BLE001
+            log_event("error", f"schedules enrich failed day={day}: {exc}")
+
+    background_tasks.add_task(_job)
+    return {"accepted": True, "day": day, "kind": "schedules_enrich", "status": "started"}
+
+
+@app.post("/api/enrich/schedules/{day}/sync")
+def enrich_schedules_sync(day: str) -> dict[str, Any]:
+    from ingest import enrich_schedules_day
+
+    return enrich_schedules_day(day)
+
+
+@app.get("/api/schedules")
+def list_schedules(day: str, limit: int = 200) -> dict[str, Any]:
+    with db() as conn:
+        rows = fetch_all(
+            conn,
+            "SELECT * FROM schedules_day WHERE day=%s::date ORDER BY schedule_id LIMIT %s",
+            (day, limit),
+        )
+        n = fetch_one(
+            conn, "SELECT COUNT(*) AS n FROM schedules_day WHERE day=%s::date", (day,)
+        )["n"]
+    return {"day": day, "total": int(n), "items": _ser_rows(rows)}
 
 
 @app.post("/api/runs")

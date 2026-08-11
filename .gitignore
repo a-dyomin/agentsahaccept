@@ -16,3 +16,11 @@ tz-repo/
 agent1/_remote_snap/
 agent1/deploy/tmp_*
 
+# Local scratch / exports
+_tmp_*/
+_tmp_*
+data/
+*.pdf
+Построчная_сверка_промптов_ТЗ.docx
+Сверка_агент_человек_*.pdf
+

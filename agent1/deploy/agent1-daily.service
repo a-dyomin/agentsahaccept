@@ -9,5 +9,7 @@ User=admin-akea
 WorkingDirectory=/home/admin-akea/agent1
 EnvironmentFile=/home/admin-akea/agent1/.env
 Environment=PATH=/home/admin-akea/agent1/venv/bin:/usr/bin
-# Позавчера (Samara/Yekaterinburg): фото и Wialon уже догружены
-ExecStart=/bin/bash -lc 'DAY=$(TZ=Asia/Yekaterinburg date -d "2 days ago" +%%F); curl -sS -X POST "http://127.0.0.1:8101/api/ingest/day/${DAY}?enqueue=true"'
+# Позавчера (Samara/Yekaterinburg) в ~01:00: фото и Wialon уже догружены
+# --noproxy: на izhon задан HTTP_PROXY, localhost иначе уходит в прокси
+# $$ = литеральный $ для bash (иначе systemd подставляет пустой DAY → /api/ingest/day/ → 404)
+ExecStart=/bin/bash -lc 'DAY=$(TZ=Asia/Yekaterinburg date -d "2 days ago" +%%F); echo "agent1-daily ingest day=$$DAY"; curl -sS --noproxy "*" -X POST "http://127.0.0.1:8101/api/ingest/day/$${DAY}?enqueue=true"'
