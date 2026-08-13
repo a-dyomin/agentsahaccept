@@ -459,12 +459,16 @@ def _run_ingest_job(day: str, enqueue: bool) -> None:
 @app.post("/api/ingest/day/{day}")
 def ingest_day(day: str, background_tasks: BackgroundTasks, enqueue: bool = True) -> dict[str, Any]:
     """Pull Greta day via SSH export and optionally enqueue Stage1 jobs (async)."""
+    if get_state() in {"paused", "stopped", "maintenance"}:
+        raise HTTPException(status_code=423, detail="agent paused; ingest disabled")
     background_tasks.add_task(_run_ingest_job, day, enqueue)
     return {"accepted": True, "day": day, "enqueue": enqueue, "status": "started"}
 
 
 @app.post("/api/ingest/day/{day}/sync")
 def ingest_day_sync(day: str, enqueue: bool = True) -> dict[str, Any]:
+    if get_state() in {"paused", "stopped", "maintenance"}:
+        raise HTTPException(status_code=423, detail="agent paused; ingest disabled")
     """Synchronous ingest (for first bring-up / debugging)."""
     from ingest import persist_export, pull_day_json, ensure_schema, enqueue_stage1
 
@@ -559,6 +563,10 @@ def create_run(body: CreateRunRequest) -> dict[str, Any]:
 def next_job(worker_id: str = "worker-1") -> dict[str, Any]:
     now = utc_now()
     with _lock, db() as conn:
+        # paused / stopped: не выдаём новые заявки (13.08 — стоп без ингеста новых дат)
+        st = fetch_one(conn, "SELECT value FROM meta WHERE key=%s", ("agent_state",))
+        if (st or {}).get("value") in {"paused", "stopped", "maintenance"}:
+            return {"job": None, "paused": True}
         row = fetch_one(
             conn,
             "SELECT * FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1 "
@@ -737,7 +745,21 @@ def list_results(limit: int = 100) -> dict[str, Any]:
         rows = fetch_all(
             conn, "SELECT * FROM results ORDER BY created_at DESC LIMIT %s", (limit,)
         )
-    return {"items": _ser_rows(rows)}
+    items = _ser_rows(rows)
+    # 12.08: answers / answers_why / answers_model рядом с результатами
+    for it in items:
+        detail = it.get("agent_detail") or {}
+        if isinstance(detail, str):
+            try:
+                detail = json.loads(detail)
+            except Exception:  # noqa: BLE001
+                detail = {}
+        s2 = (detail or {}).get("stage2") or {}
+        it["answers"] = s2.get("answers")
+        it["answers_model"] = s2.get("answers_model")
+        it["answers_why"] = s2.get("answers_why")
+        it["checklist"] = s2.get("checklist") or (detail or {}).get("checklist")
+    return {"items": items}
 
 
 @app.get("/api/compare")

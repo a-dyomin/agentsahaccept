@@ -11,9 +11,12 @@ from typing import Any
 from checklist_prompts import questions_for
 from checklist_verdict import (
     CODES,
+    apply_razryv,
     compute_photo_verdict,
+    formal_suspect_photo_notes,
     is_vision_blind,
     normalize_answers,
+    shot_span_seconds,
     soften_o3,
     to_internal_answers,
 )
@@ -48,27 +51,12 @@ VISION_ENABLED = os.environ.get("AGENT1_VISION_ENABLED", "auto").lower()
 # low|high|auto — low достаточно при пометках ДО/ПОСЛЕ; high — если А3 снова проседает
 VISION_DETAIL = os.environ.get("AGENT1_VISION_DETAIL", "low").lower()
 
-# Greta marks each frame; without this the model has to guess which shot is «после».
-# Для невывоза вывоза не было — там «ПОСЛЕ вывоза» уводит модель в «помеха уже убрана».
-PTYPE_LABELS = {
-    "site_before": "ДО вывоза",
-    "site_after": "ПОСЛЕ вывоза",
-}
-PTYPE_LABELS_NO_REMOVAL = {
-    "site_before": "по прибытии на точку",
-    "site_after": "перед отъездом с точки",
-}
-
-
+# Роли «до/после» из Greta ptype больше не подставляем в промпт (ТЗ Прил. Б / 12.08 п.9).
+# Состояния модель определяет по содержимому и времени съёмки.
 FALLBACK_NOTE = (
-    "Если вопрос неприменим — ответь 0; "
-    "для О3, А4, С5, Б5, Н5 и Н6 неприменимость — это 1 (позитивная полярность)."
+    "Если вопрос неприменим — ответь 0 и начни обоснование словом «неприменимо». "
+    "Полярность как в ТЗ: О3/А4/С5/Б5/Н5/Н6 = 1 означает «да, признак/остаток/противоречие есть»."
 )
-
-
-def frame_label(checklist: str, ptype: Any) -> str:
-    labels = PTYPE_LABELS_NO_REMOVAL if str(checklist) == "2" else PTYPE_LABELS
-    return labels.get(str(ptype or ""), "")
 # USD per 1M tokens (defaults for gpt-4o-mini; set env when switching model)
 VISION_INPUT_PER_M = float(os.environ.get("AGENT1_VISION_INPUT_USD_PER_M", "0.15"))
 VISION_OUTPUT_PER_M = float(os.environ.get("AGENT1_VISION_OUTPUT_USD_PER_M", "0.60"))
@@ -184,7 +172,9 @@ def call_vision(
                 f"{questions_for(checklist.value)}\n\n"
                 "НЕ выноси общий вердикт. Только ответы на вопросы.\n"
                 f"Ответь СТРОГО JSON: "
-                f'{{"answers":{{{codes} as 0|1 (А6 — число)}},"comment":"кратко"}}\n'
+                f'{{"answers":{{{codes} as 0|1 (А6 — число)}},'
+                f'"answers_why":{{{codes} as краткое обоснование}},'
+                f'"comment":"кратко"}}\n'
                 f"{FALLBACK_NOTE}"
             ),
         }
@@ -192,10 +182,7 @@ def call_vision(
     for idx, item in enumerate(photo_items[:8], start=1):
         p: Path = item["path"]
         t = item.get("time")
-        kind = frame_label(checklist.value, item.get("kind"))
         label = f"Снимок {idx}"
-        if kind:
-            label += f" — {kind}"
         label += f", снят в {t}." if t else ", время съёмки неизвестно."
         parts.append({"type": "text", "text": label})
         img_bytes, mime = prepare_image_for_vision(p)
@@ -246,7 +233,13 @@ def call_vision(
         usage = payload.get("usage") or {}
     parsed = _parse_vision_json(content)
     answers = parsed.get("answers") or {}
+    answers_why = parsed.get("answers_why") or parsed.get("why") or {}
+    if not isinstance(answers_why, dict):
+        answers_why = {}
     model_comment = str(parsed.get("comment") or "")
+    # Подмешать why в комментарий для soften_o3 / эвристик
+    why_blob = " ".join(str(v) for v in answers_why.values() if v)
+    evidence_text = f"{model_comment} {why_blob}".strip()
     prompt_t = int(usage.get("prompt_tokens") or 0)
     completion_t = int(usage.get("completion_tokens") or 0)
     total_t = int(usage.get("total_tokens") or (prompt_t + completion_t))
@@ -267,26 +260,49 @@ def call_vision(
             "reason": "model_did_not_inspect",
             "comment": model_comment,
             "answers": answers,
+            "answers_model": answers,
+            "answers_why": answers_why,
             "model": VISION_MODEL,
             "usage": usage_block,
         }
     raw_norm = normalize_answers(answers)
-    softened = soften_o3(answers, model_comment)
+    softened = soften_o3(answers, evidence_text)
     internal = to_internal_answers(softened)
     computed = compute_photo_verdict(checklist.value, internal, comment=model_comment)
+    filenames = [
+        {"filename": it.get("filename") or (Path(it["path"]).name if it.get("path") else "")}
+        for it in photo_items
+    ]
+    span = shot_span_seconds(filenames)
+    raz = apply_razryv(
+        checklist.value, internal, span_sec=span, comment=model_comment
+    )
+    photo_verdict = computed.photo_verdict
+    za_chto = computed.za_chto
+    pometki = computed.pometki
+    if raz is not None:
+        photo_verdict = raz.photo_verdict
+        za_chto = "; ".join(p for p in (za_chto, raz.za_chto) if p)
+        pometki = "; ".join(p for p in (pometki, raz.pometki) if p)
+    formal_notes = formal_suspect_photo_notes(filenames)
+    if formal_notes:
+        # Скрин/карта — пометка, не авто-нарушение (уточнение мониторинга 12.08).
+        pometki = "; ".join(p for p in (pometki, *formal_notes) if p)
     return {
         "status": "ok",
         "checklist": checklist.value,
-        "photo_verdict": computed.photo_verdict,
-        "za_chto": computed.za_chto,
-        "pometki": computed.pometki,
+        "photo_verdict": photo_verdict,
+        "za_chto": za_chto,
+        "pometki": pometki,
         "comment": computed.comment,
         "answers": internal,
         "answers_model": answers,
-        "o3_softened": raw_norm.get("О3") == 0 and softened.get("О3") == 1,
+        "answers_why": answers_why,
+        "o3_softened": raw_norm.get("О3") == 1 and softened.get("О3") == 0,
         "verdict_source": "program",
         "model": VISION_MODEL,
         "usage": usage_block,
+        "shot_span_sec": span,
     }
 
 
@@ -334,7 +350,7 @@ def run_stage2(payload: dict[str, Any], photos: list[dict[str, Any]]) -> dict[st
                     {
                         "path": path,
                         "time": shot_time_label(str(ph.get("filename") or "")),
-                        "kind": ph.get("ptype"),
+                        "filename": str(ph.get("filename") or path.name),
                     }
                 )
         except Exception as exc:  # noqa: BLE001

@@ -19,6 +19,7 @@ from stage1_shadow import (  # noqa: E402
     VERDICT_NOT_IN_WORK,
     compare_human,
     decide_stage1,
+    match_access_block_reason,
 )
 
 
@@ -293,24 +294,23 @@ def test_1g_b2_b5_contradiction_then_b3_fail():
     assert "спорные ответы Б2/Б5" in r.pometki
 
 
-def test_o3_polarity_inverted_from_model():
-    """Модель отвечает «снимки подлинные»: 1 → внутренняя О3=0 (подделки нет)."""
+def test_o3_polarity_tz_passthrough():
+    """ТЗ: О3=0 нет подделки, О3=1 есть — без инверсии."""
     from checklist_verdict import to_internal_answers
 
-    ok = to_internal_answers({"О1": 1, "О2": 1, "О3": 1, "А0": 1})
+    ok = to_internal_answers({"О1": 1, "О2": 1, "О3": 0, "А0": 1})
     assert ok["О3"] == 0
-    fake = to_internal_answers({"О1": 1, "О2": 1, "О3": 0, "А0": 1})
+    fake = to_internal_answers({"О1": 1, "О2": 1, "О3": 1, "А0": 1})
     assert fake["О3"] == 1
-    # прочие коды не трогаем
     assert ok["О1"] == 1 and ok["А0"] == 1
 
 
 def test_o3_authentic_photos_not_violation():
-    """Подлинные снимки (модель О3=1) больше не дают «фото:О3»."""
+    """О3=0 (нет подделки) не даёт «фото:О3»."""
     from checklist_verdict import to_internal_answers
 
     a = to_internal_answers(
-        {"О1": 1, "О2": 1, "О3": 1, "А0": 1, "А1": 1, "А2": 1, "А3": 1, "А4": 1, "А5": 1}
+        {"О1": 1, "О2": 1, "О3": 0, "А0": 1, "А1": 1, "А2": 1, "А3": 1, "А4": 0, "А5": 1}
     )
     r = compute_photo_verdict("1а", a)
     assert r.photo_verdict == VERDICT_CONFIRMED
@@ -321,76 +321,70 @@ def test_soften_o3_drops_soft_doubt():
     from checklist_verdict import soften_o3, to_internal_answers
 
     soft = soften_o3(
-        {"О3": 0, "А3": 1},
+        {"О3": 1, "А3": 1},
         "Снимки соответствуют требованиям, но есть вопросы по подлинности.",
     )
-    assert soft["О3"] == 1
+    assert soft["О3"] == 0
     assert to_internal_answers(soft)["О3"] == 0
 
     hard = soften_o3(
-        {"О3": 0, "А3": 1},
+        {"О3": 1, "А3": 1},
         "Это скрин карты, а не фото с места.",
     )
-    assert hard["О3"] == 0
+    assert hard["О3"] == 1
     assert to_internal_answers(hard)["О3"] == 1
 
-    already_ok = soften_o3({"О3": 1}, "ок")
-    assert already_ok["О3"] == 1
+    already_ok = soften_o3({"О3": 0}, "ок")
+    assert already_ok["О3"] == 0
 
 
-def test_a4_h5_polarity_inverted():
-    """А4 и Н5 тоже спрашиваются позитивно: 1 от модели = нарушения нет."""
+def test_a4_h5_tz_polarity():
+    """А4/Н5 в ТЗ: 1 = остаток/противоречие."""
     from checklist_verdict import to_internal_answers
 
-    clean = to_internal_answers({"А4": 1, "Н5": 1, "С5": 1, "Б5": 1, "Н6": 1})
+    clean = to_internal_answers({"А4": 0, "Н5": 0, "С5": 0, "Б5": 0, "Н6": 0})
     assert clean["А4"] == 0 and clean["Н5"] == 0
     assert clean["С5"] == 0 and clean["Б5"] == 0 and clean["Н6"] == 0
-    bad = to_internal_answers({"А4": 0, "Н5": 0, "С5": 0, "Б5": 0, "Н6": 0})
+    bad = to_internal_answers({"А4": 1, "Н5": 1, "С5": 1, "Б5": 1, "Н6": 1})
     assert bad["А4"] == 1 and bad["Н5"] == 1
     assert bad["С5"] == 1 and bad["Б5"] == 1 and bad["Н6"] == 1
 
     ok = compute_photo_verdict(
         "1а",
         to_internal_answers(
-            {"О1": 1, "О2": 1, "О3": 1, "А0": 1, "А1": 1, "А2": 1, "А3": 1, "А4": 1, "А5": 1}
+            {"О1": 1, "О2": 1, "О3": 0, "А0": 1, "А1": 1, "А2": 1, "А3": 1, "А4": 0, "А5": 1}
         ),
     )
     assert ok.photo_verdict == VERDICT_CONFIRMED
     leftovers = compute_photo_verdict(
         "1а",
         to_internal_answers(
-            {"О1": 1, "О2": 1, "О3": 1, "А0": 1, "А1": 1, "А2": 1, "А3": 1, "А4": 0, "А5": 1}
+            {"О1": 1, "О2": 1, "О3": 0, "А0": 1, "А1": 1, "А2": 1, "А3": 1, "А4": 1, "А5": 1}
         ),
     )
     assert leftovers.photo_verdict == VERDICT_VIOLATION
     assert "А4" in leftovers.za_chto
 
 
-def test_prompts_reference_before_after():
+def test_prompts_have_tz_preamble_no_ptype_roles():
     from checklist_prompts import questions_for
 
     q1a = questions_for("1а")
-    assert "ПОСЛЕ вывоза" in q1a
-    assert "Пара ДО+ПОСЛЕ" in q1a or "ДО+ПОСЛЕ" in q1a
+    assert "Правила оценки" in q1a or "Проверяй работу" in q1a
+    assert "не разделены на «до» и «после»" in q1a
+    assert "Если содержимое не разглядеть" not in q1a
     q2 = questions_for("2")
-    assert "по прибытии" in q2 or "перед отъездом" in q2
+    assert "по прибытии" not in q2
+    assert "перед отъездом" not in q2
 
 
-def test_photo_frame_labels_before_after():
-    """Кадры уходят в модель с пометкой ДО/ПОСЛЕ из ptype Гретты."""
-    import sys
-    from pathlib import Path as P
+def test_photo_frame_labels_removed():
+    """Роли ДО/ПОСЛЕ из ptype больше не подставляются (12.08 п.9)."""
+    import stage2
 
-    sys.path.insert(0, str(P(__file__).resolve().parents[1] / "agent1" / "app"))
-    from stage2 import frame_label
-
-    assert frame_label("1а", "site_before") == "ДО вывоза"
-    assert frame_label("1а", "site_after") == "ПОСЛЕ вывоза"
-    assert frame_label("1г", "site_after") == "ПОСЛЕ вывоза"
-    assert frame_label("1а", None) == ""
-    # невывоз: вывоза не было, ярлык «ПОСЛЕ вывоза» давал О1=0 в 95% заявок
-    assert "вывоз" not in frame_label("2", "site_after")
-    assert frame_label("2", "site_after") == "перед отъездом с точки"
+    assert not hasattr(stage2, "frame_label") or not callable(
+        getattr(stage2, "frame_label", None)
+    )
 
 
 def test_is_vision_blind():
@@ -482,3 +476,155 @@ def test_nonpickup_foto_doezd():
     )
     assert r["agent_verdict"] == "НАРУШЕНИЕ (график)"
     assert "ФОТО_ДОЕЗД" in r["agent_detail"]["za_chto"]
+
+
+def test_access_block_reason_dict():
+    assert match_access_block_reason("Не проехать к площадке") == "не проехать"
+    assert match_access_block_reason("нет подъезда, ворота закрыты") == "нет подъезда"
+    assert match_access_block_reason("шлагбаум не открывают") == "ворота/шлагбаум"
+    assert match_access_block_reason("размыло дорогу") == "погода/дорога"
+    assert match_access_block_reason("машина перекрыла проезд") == "автомобиль/помеха"
+    # не ловить «поворот» как «ворота»
+    assert match_access_block_reason("поворот налево к МКД") is None
+    assert match_access_block_reason("обычный комментарий без причины") is None
+
+
+def test_nonpickup_access_block_softens_schedule_confirmed():
+    """Уважительный блок + фото ПОДТВЕРЖДЕНО → не НАРУШЕНИЕ (график) по ТРЕК/ДОЕЗД."""
+    r = decide_stage1(
+        {
+            "state": "canceled_by_driver",
+            "schedule_id": 10,
+            "photo_count": 1,
+            "has_report": True,
+            "fail_reason": "Не проехать",
+            "report_comment": "размыло, нет подъезда",
+            "track_exists": True,
+            "track_flag": "0",
+            "time_flag": "1",
+            "foto_doezd_flag": "0",
+            "foto_doezd_m": 250,
+        },
+        {"photo_verdict": "ПОДТВЕРЖДЕНО", "status": "ok"},
+    )
+    assert r["agent_verdict"] == "ЧИСТО"
+    assert "ТРЕК" not in (r["agent_detail"]["za_chto"] or "")
+    assert "ФОТО_ДОЕЗД" not in (r["agent_detail"]["za_chto"] or "")
+    assert "уважительный блок" in r["agent_detail"]["pometki"]
+
+
+def test_nonpickup_access_block_skipped_escalates():
+    """SKIPPED + уважительный блок: без schedule-violation → К ЧЕЛОВЕКУ."""
+    r = decide_stage1(
+        {
+            "state": "canceled_by_driver",
+            "schedule_id": 10,
+            "photo_count": 1,
+            "has_report": True,
+            "fail_reason": "Нет подъезда",
+            "track_exists": True,
+            "track_flag": "0",
+            "time_flag": "1",
+            "foto_doezd_flag": "1",
+        },
+        {"photo_verdict": "ПРОПУСК", "status": "skipped", "reason": "vision_off"},
+    )
+    assert r["agent_verdict"] == "К ЧЕЛОВЕКУ"
+    assert "ТРЕК" not in (r["agent_detail"]["za_chto"] or "")
+
+
+def test_nonpickup_access_block_photo_violation_keeps_schedule():
+    """Н5 / фото-НАРУШЕНИЕ опровергает причину — смягчения графика нет."""
+    r = decide_stage1(
+        {
+            "state": "canceled_by_driver",
+            "schedule_id": 10,
+            "photo_count": 1,
+            "has_report": True,
+            "fail_reason": "Не проехать",
+            "track_exists": True,
+            "track_flag": "0",
+            "time_flag": "1",
+            "foto_doezd_flag": "0",
+        },
+        {
+            "photo_verdict": "НАРУШЕНИЕ",
+            "status": "ok",
+            "za_chto": "Н5",
+            "pometki": "проезд свободен",
+        },
+    )
+    # merge: VIOLATION → НАРУШЕНИЕ (фото); график не смягчали, но фото побеждает
+    assert r["agent_verdict"] == "НАРУШЕНИЕ (фото)"
+
+
+def test_geo_na_with_track_not_human():
+    """§7.5: нет GPS у фото + трек ОК → не К ЧЕЛОВЕКУ."""
+    r = decide_stage1(
+        {
+            "state": "done",
+            "schedule_id": 1,
+            "photo_count": 2,
+            "geo_flag": "ND",
+            "geo_no_coord": 2,
+            "track_exists": True,
+            "track_flag": "1",
+            "track_min_m": 40.0,
+            "time_flag": "1",
+        },
+        {"photo_verdict": "ПОДТВЕРЖДЕНО", "status": "ok"},
+    )
+    assert r["agent_verdict"] == "ЧИСТО"
+    assert "нет координат" in r["agent_detail"]["pometki"]
+    assert r["agent_detail"]["stage1"].get("ГЕО_ПО_ТРЕКУ") == 1
+
+
+def test_geo_fail_confirmed_photos_labeled_schedule_when_no_track_rescue():
+    """ГЕО=0 без спасения треком + принятые снимки → НАРУШЕНИЕ (график), не (фото)."""
+    r = decide_stage1(
+        {
+            "state": "done",
+            "schedule_id": 1,
+            "photo_count": 2,
+            "geo_flag": "0",
+            "geo_min_m": 500.0,
+            "track_exists": True,
+            "track_flag": "0",
+            "time_flag": "1",
+        },
+        {"photo_verdict": "ПОДТВЕРЖДЕНО", "status": "ok"},
+    )
+    assert r["agent_verdict"] == "НАРУШЕНИЕ (график)"
+
+
+def test_razryv_short_gap_with_a3_zero():
+    from checklist_verdict import apply_razryv
+
+    raz = apply_razryv(
+        "1а",
+        {"О1": 1, "О2": 1, "О3": 0, "А0": 1, "А1": 1, "А2": 1, "А3": 0, "А4": 0, "А5": 0},
+        span_sec=8.0,
+    )
+    assert raz is not None
+    assert raz.photo_verdict == VERDICT_VIOLATION
+    assert "РАЗРЫВ" in raz.za_chto
+    assert apply_razryv("1а", {"А3": 0}, span_sec=25.0) is None
+    assert apply_razryv("1а", {"А2": 1, "А3": 1}, span_sec=5.0) is None
+
+
+def test_formal_suspect_png_note():
+    from checklist_verdict import formal_suspect_photo_notes
+
+    notes = formal_suspect_photo_notes(
+        [{"filename": "map_screenshot.png"}, {"filename": "JPEG_20260807_120000.jpg"}]
+    )
+    assert any("png" in n for n in notes)
+    assert not any("JPEG_20260807" in n for n in notes)
+
+
+def test_prompts_include_rso_and_night_rules():
+    from checklist_prompts import questions_for
+
+    q = questions_for("1а")
+    assert "РСО" in q
+    assert "Ночная съёмка" in q or "ночн" in q.lower()

@@ -64,39 +64,108 @@ _CODE_TRANS = {
 }
 
 
-# Codes the model is asked with «1 = всё в порядке» polarity, stored inverted for the rules.
-# Mixed polarity inside one question list made gpt-4o-mini answer 1 as «ок» (854 false О3 on 03.08).
-# Asked as «1 = чисто / подлинно / нет противоречия»; stored inverted for the rules.
-POSITIVE_CODES: tuple[str, ...] = ("О3", "А4", "С5", "Б5", "Н5", "Н6")
+# TZ Appendix B polarity (12.08): questions match internal semantics directly.
+# О3/А4/С5/Б5/Н5/Н6: 1 = «да, есть признак/остаток/противоречие». No inversion.
+POSITIVE_CODES: tuple[str, ...] = ()
 
-# Hard evidence of a fake frame. Soft «есть вопросы по подлинности» without these is noise:
-# with ДО/ПОСЛЕ labels the model hedges on every before/after pair (336/336 soft on 03.08).
+# Hard evidence of a fake frame. Soft «есть вопросы по подлинности» without these is noise.
 _O3_HARD_FAKE = re.compile(
     r"скрин|screenshot|\bкарт[аыеу]\b|google\s*maps|яндекс\.?\s*карт|экран|"
-    r"не с места|чужое место|один и тот же файл|дубль одного",
+    r"не с места|чужое место|один и тот же файл|дубль одного|распечат",
     re.IGNORECASE,
 )
 
+# Greta app filename: JPEG_YYYYMMDD_HHMMSS (kept for docs/tests)
+_JPEG_APP_NAME = re.compile(r"^JPEG_\d{8}_\d{6}(?:\D|$)", re.IGNORECASE)
+
 
 def soften_o3(raw: Any, comment: str = "") -> dict[str, int]:
-    """Drop О3=0 when the model only hedges and cites no hard fake evidence."""
+    """Drop weak О3=1 (TZ: признаки подделки) without hard evidence in comment/why."""
     a = normalize_answers(raw)
-    if a.get("О3") != 0:
+    if a.get("О3") != 1:
         return a
     if _O3_HARD_FAKE.search(comment or ""):
         return a
-    a["О3"] = 1
+    a["О3"] = 0
     return a
 
 
 def to_internal_answers(raw: Any) -> dict[str, int]:
-    """Model answers → internal semantics (О3=1 подделка; А4/С5/Б5/Н6=1 остатки; Н5=1 противоречие)."""
+    """Model answers → internal semantics (TZ polarity; POSITIVE_CODES empty)."""
     a = normalize_answers(raw)
     for code in POSITIVE_CODES:
         if code in a:
             a[code] = 0 if a[code] else 1
     return a
 
+
+def formal_suspect_photo_notes(photos: list[dict[str, Any]] | None) -> list[str]:
+    """Heuristic map/screenshot flags → пометки, не авто-О3 (мониторинг 12.08)."""
+    from pathlib import Path
+
+    notes: list[str] = []
+    app_ok = re.compile(r"^(?:JPEG|IMG|DSC)[_\-]?\d{8}[_\-]?\d{6}", re.I)
+    for ph in photos or []:
+        fn = str(ph.get("filename") or ph.get("name") or "").strip()
+        if not fn:
+            continue
+        base = Path(fn).name
+        stem = Path(base).stem
+        low = base.lower()
+        if low.endswith(".png"):
+            notes.append(f"возможный скрин ({base}): png — проверить")
+        elif not app_ok.match(stem):
+            notes.append(f"имя файла не по шаблону JPEG_… ({base}) — проверить")
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in notes:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out[:8]
+
+
+def shot_span_seconds(photos: list[dict[str, Any]] | None) -> float | None:
+    """Seconds between earliest and latest filename timestamps; None if <2 times."""
+    from photo_meta import shot_datetime_from_filename
+
+    times = []
+    for ph in photos or []:
+        dt = shot_datetime_from_filename(str(ph.get("filename") or ""))
+        if dt is not None:
+            times.append(dt)
+    if len(times) < 2:
+        return None
+    return (max(times) - min(times)).total_seconds()
+
+
+def apply_razryv(
+    checklist: str,
+    answers: dict[str, Any] | None,
+    *,
+    span_sec: float | None,
+    comment: str = "",
+) -> VerdictResult | None:
+    """РАЗРЫВ: gap <20s and result-of-work not shown → violation marker (12.08)."""
+    if span_sec is None or span_sec >= 20:
+        return None
+    a = normalize_answers(answers or {})
+    cl = (checklist or "").strip()
+    trigger = False
+    if cl == "1а" and a.get("А3") == 0:
+        trigger = True
+    elif cl == "1б" and a.get("С1") == 1 and a.get("С2") == 0:
+        trigger = True
+    elif cl == "1г" and a.get("Б1") == 1 and a.get("Б2") == 0:
+        trigger = True
+    if not trigger:
+        return None
+    return VerdictResult(
+        photo_verdict=VERDICT_VIOLATION,
+        za_chto=_za("РАЗРЫВ"),
+        pometki=f"интервал кадров {span_sec:.0f}с < 20с при непоказанном результате",
+        comment=comment or "разрыв: одно состояние снято дважды",
+    )
 
 def normalize_answers(raw: Any) -> dict[str, int]:
     """Flatten model answers to {code: int}."""

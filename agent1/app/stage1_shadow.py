@@ -1,6 +1,7 @@
 """Stage1 shadow decision from precomputed Greta export fields + Stage2 merge (TZ §5 / §7.2)."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from merge_itog import MergeInput, PhotoVerdict, coerce_photo_verdict, merge_itog
@@ -17,6 +18,30 @@ VERDICT_NOT_CHECKED = "НЕ ПРОВЕРЯЕТСЯ"
 VERDICT_FAILED_SHIFT = "СМЕНА НЕ ВЫШЛА"
 VERDICT_TRANSFERRED = "ПЕРЕНЕСЕНА"  # документ «Перенос» из 1С (TZ §5.4)
 
+# На невывозе эти флаги не должны автоматом давать «НАРУШЕНИЕ (график)»,
+# если причина — уважительный блок проезда и фото её не опровергает.
+_SOFT_SCHEDULE_FLAGS = frozenset({"ТРЕК", "ТРЕК_ЕСТЬ", "ФОТО_ДОЕЗД", "ВРЕМЯ_ПРЕП", "ВРЕМЯ"})
+
+# Словарь уважительных причин невывоза (fail_reason + комментарий отчёта).
+_ACCESS_BLOCK_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pat, re.IGNORECASE), label)
+    for pat, label in (
+        (r"не\s*проехать|невозможно\s+проехать", "не проехать"),
+        (r"нет\s+подъезд|подъездн\w*\s+нет|нет\s+подъезда", "нет подъезда"),
+        (r"невозможно\s+подъехать|не\s+подъехать", "невозможно подъехать"),
+        (r"закрыт\w*\s+проезд|проезд\w*\s+закрыт", "закрыт проезд"),
+        (r"ворот[аыуе]|шлагбаум|забор", "ворота/шлагбаум"),
+        (r"размыт|размыл|ливн|дожд|гряз[ьи]|снег|коле[яи]|провалива", "погода/дорога"),
+        (r"нет\s+разворот", "нет разворота"),
+        (
+            r"автомобил\w*.{0,20}меша|машин\w*.{0,20}(меша|перекры|стоя)|"
+            r"припаркован|перекрыт\w*\s+авто",
+            "автомобиль/помеха",
+        ),
+        (r"нет\s+возможност\w*\s+проезд", "нет возможности проезда"),
+    )
+)
+
 
 def _flag(v: Any) -> str:
     if v is None:
@@ -24,6 +49,74 @@ def _flag(v: Any) -> str:
     if v == "ND" or v == "Н/Д":
         return "ND"
     return str(v)
+
+
+def match_access_block_reason(text: str | None) -> str | None:
+    """Вернуть ярлык уважительной причины блока проезда или None."""
+    if not text:
+        return None
+    raw = str(text).strip()
+    if not raw:
+        return None
+    for pat, label in _ACCESS_BLOCK_PATTERNS:
+        if pat.search(raw):
+            return label
+    return None
+
+
+def legitimate_access_block_reason(payload: dict[str, Any]) -> str | None:
+    """Искать уважительную причину в fail_reason и комментарии отчёта."""
+    for key in ("fail_reason", "report_comment"):
+        label = match_access_block_reason(payload.get(key))
+        if label:
+            return label
+    # Иногда оба поля склеены в одной строке при ручных тестах.
+    joined = " ".join(
+        str(payload.get(k) or "").strip()
+        for k in ("fail_reason", "report_comment")
+        if payload.get(k)
+    )
+    return match_access_block_reason(joined) if joined else None
+
+
+def _soften_nonpickup_schedule_for_access(
+    *,
+    za: list[str],
+    pometki: list[str],
+    schedule_fail: bool,
+    payload: dict[str, Any],
+    stage2: dict[str, Any] | None,
+    has_report: bool,
+    photo_count: int,
+) -> tuple[list[str], list[str], bool]:
+    """П.3–4: не авто-НАРУШЕНИЕ (график) по ТРЕК/ФОТО_ДОЕЗД при уважительном блоке.
+
+    Условия: есть отчёт, есть фото, причина из словаря, Stage2 не опровергает
+    (photo_verdict ≠ НАРУШЕНИЕ / VIOLATION). Жёсткие ОТЧЁТ/ФОТО_ПРЕП не смягчаем.
+    """
+    if not has_report or photo_count < 1:
+        return za, pometki, schedule_fail
+    reason = legitimate_access_block_reason(payload)
+    if not reason:
+        return za, pometki, schedule_fail
+    photo_v = coerce_photo_verdict(
+        (stage2 or {}).get("photo_verdict") if stage2 else None
+    )
+    # Фото опровергает причину (Н5 / VIOLATION) — график не смягчаем.
+    if photo_v == PhotoVerdict.VIOLATION:
+        return za, pometki, schedule_fail
+
+    soft = [z for z in za if z in _SOFT_SCHEDULE_FLAGS]
+    if not soft:
+        return za, pometki, schedule_fail
+
+    hard = [z for z in za if z not in _SOFT_SCHEDULE_FLAGS]
+    pometki.append(
+        f"уважительный блок проезда («{reason}»): "
+        f"{', '.join(soft)} → пометки, не авто-нарушение графика"
+    )
+    schedule_fail = bool(hard)
+    return hard, pometki, schedule_fail
 
 
 def decide_stage1(payload: dict[str, Any], stage2: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -141,13 +234,20 @@ def decide_stage1(payload: dict[str, Any], stage2: dict[str, Any] | None = None)
                 "ГЕО фото вне порога; место подтверждено треком Wialon и содержанием фото"
             )
         if geo == "ND" and (payload.get("geo_no_coord") or 0) >= photo_count and photo_count > 0:
-            pometki.append("место не проверено")
-            geo_na_no_coords = True
-            return _finalize(
-                stage1, payload, stage2, za, pometki,
-                special_human=False, geo_fail=geo_fail,
-                geo_na_no_coords=True, schedule_fail=schedule_fail,
-            )
+            # TZ §7.5 / 12.08: нет GPS у фото, но трек подтверждает доезд → не человеку.
+            if track_exists and track == "1":
+                stage1["ГЕО_ПО_ТРЕКУ"] = 1
+                pometki.append(
+                    "у снимков нет координат, место подтверждено треком"
+                )
+            else:
+                pometki.append("место не проверено")
+                geo_na_no_coords = True
+                return _finalize(
+                    stage1, payload, stage2, za, pometki,
+                    special_human=False, geo_fail=geo_fail,
+                    geo_na_no_coords=True, schedule_fail=schedule_fail,
+                )
         if not track_exists and geo == "ND":
             pometki.append("нет ни трека, ни координат")
             return _finalize(
@@ -194,6 +294,15 @@ def decide_stage1(payload: dict[str, Any], stage2: dict[str, Any] | None = None)
                 schedule_fail = True
             stage1["ВРЕМЯ_ПРЕП"] = time_f
             stage1["ВРЕМЯ_ПРЕП_МИН"] = payload.get("time_dev_min")
+        za, pometki, schedule_fail = _soften_nonpickup_schedule_for_access(
+            za=za,
+            pometki=pometki,
+            schedule_fail=schedule_fail,
+            payload=payload,
+            stage2=stage2,
+            has_report=has_report,
+            photo_count=photo_count,
+        )
         return _finalize(
             stage1, payload, stage2, za, pometki,
             special_human=False, geo_fail=False,
@@ -232,9 +341,8 @@ def _finalize(
 
     if photo_v == PhotoVerdict.SKIPPED and not special_human and not geo_na_no_coords:
         reason = str(s2.get("reason") or s2.get("status") or "нет фото-вердикта")
-        if geo_fail:
-            itog = "НАРУШЕНИЕ (фото)"
-        elif schedule_fail or za:
+        if geo_fail or schedule_fail or za:
+            # Без осмотра снимков ярлык «(фото)» не ставим (12.08).
             itog = "НАРУШЕНИЕ (график)"
         else:
             itog = "К ЧЕЛОВЕКУ"

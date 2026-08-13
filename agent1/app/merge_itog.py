@@ -34,13 +34,14 @@ def merge_itog(inp: MergeInput) -> Itog:
     # TZ §7.2 top-down
     if inp.special_human or inp.photo_verdict == PhotoVerdict.TYPE_MISMATCH or inp.geo_na_no_coords:
         if inp.photo_verdict == PhotoVerdict.TYPE_MISMATCH and (inp.geo_fail or inp.schedule_fail):
-            if inp.geo_fail:
-                return Itog.PHOTO
+            # Место/график — не «(фото)»; содержание осмотра здесь не провалено.
             return Itog.SCHEDULE
         return Itog.HUMAN
-    if inp.photo_verdict == PhotoVerdict.VIOLATION or inp.geo_fail:
+    # «(фото)» только если осмотр снимков дал нарушение (12.08).
+    # Провал ГЕО/места при принятых кадрах — претензия к месту → «(график)».
+    if inp.photo_verdict == PhotoVerdict.VIOLATION:
         return Itog.PHOTO
-    if inp.schedule_fail:
+    if inp.geo_fail or inp.schedule_fail:
         return Itog.SCHEDULE
     # SKIPPED/PENDING: Stage1-only path (vision not run) → schedule/geo already applied above
     return Itog.CLEAN

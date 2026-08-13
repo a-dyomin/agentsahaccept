@@ -32,14 +32,13 @@ class MergeInput:
 def merge_itog(inp: MergeInput) -> Itog:
     # TZ §7.2 top-down
     if inp.special_human or inp.photo_verdict == PhotoVerdict.TYPE_MISMATCH or inp.geo_na_no_coords:
-        # exception: type mismatch + math fail → violation, type goes to notes
+        # exception: type mismatch + math fail → schedule/geo label, type goes to notes
         if inp.photo_verdict == PhotoVerdict.TYPE_MISMATCH and (inp.geo_fail or inp.schedule_fail):
-            if inp.geo_fail:
-                return Itog.PHOTO
             return Itog.SCHEDULE
         return Itog.HUMAN
-    if inp.photo_verdict == PhotoVerdict.VIOLATION or inp.geo_fail:
+    # «(фото)» только при нарушении осмотра снимков; ГЕО/место → «(график)» (12.08).
+    if inp.photo_verdict == PhotoVerdict.VIOLATION:
         return Itog.PHOTO
-    if inp.schedule_fail:
+    if inp.geo_fail or inp.schedule_fail:
         return Itog.SCHEDULE
     return Itog.CLEAN
