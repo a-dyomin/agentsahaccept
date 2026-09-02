@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -17,11 +19,53 @@ from db import db, fetch_all, fetch_one, init_db
 from schema_v2 import SCHEMA_V2
 from stage1_shadow import compare_human
 
-BASE = Path(__import__("os").environ.get("AGENT1_HOME", Path(__file__).resolve().parent.parent))
+BASE = Path(os.environ.get("AGENT1_HOME", Path(__file__).resolve().parent.parent))
 DASH = BASE / "dashboard"
 DASH.mkdir(parents=True, exist_ok=True)
+_GRETA_DIR = str(BASE / "greta")
+if _GRETA_DIR not in sys.path:
+    sys.path.insert(0, _GRETA_DIR)
 
 _lock = threading.Lock()
+
+
+def _push_greta_review(order_id: Any, verdict: str, detail: dict[str, Any], result_id: str) -> None:
+    """Отправить решение в Greta. Ошибка writeback не валит заявку."""
+    enabled = os.environ.get("GRETA_REVIEW_ACCEPT_ENABLED", "auto").lower()
+    token = os.environ.get("GRETA_REVIEW_ACCEPT_TOKEN")
+    if enabled in {"0", "false", "no", "off"}:
+        return
+    if enabled in {"auto"} and not token:
+        return
+    if not token:
+        return
+    try:
+        from review_accept_writeback import (  # noqa: WPS433
+            VERDICT_TO_GRETA,
+            comment_from_detail,
+            payload_for_verdict,
+            post_review_accept,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log_event("error", f"greta writeback import failed: {exc}")
+        return
+    if verdict not in VERDICT_TO_GRETA:
+        return
+    try:
+        body = payload_for_verdict(
+            order_id=int(order_id),
+            agent_verdict=verdict,
+            agent_comment=comment_from_detail(detail, verdict),
+            agent_version=os.environ.get("AGENT1_VERSION", "10baa44"),
+            decision_id=f"agent1:{order_id}:{result_id}",
+        )
+        status = post_review_accept(body, token)
+        if status == 204:
+            log_event("info", f"greta writeback 204 order={order_id} verdict={verdict}")
+        else:
+            log_event("error", f"greta writeback HTTP {status} order={order_id}")
+    except Exception as exc:  # noqa: BLE001
+        log_event("error", f"greta writeback order={order_id}: {exc}")
 
 
 def utc_now() -> datetime:
@@ -736,6 +780,7 @@ def post_result(job_id: str, body: JobResultIn) -> dict[str, Any]:
                     ),
                 )
 
+    _push_greta_review(job["order_id"], body.agent_verdict, detail, rid)
     return {"ok": True, "result_id": rid, "match": match, "diff_reason": diff_reason}
 
 

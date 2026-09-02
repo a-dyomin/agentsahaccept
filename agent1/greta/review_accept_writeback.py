@@ -46,6 +46,14 @@ VERDICT_TO_GRETA: dict[str, dict[str, Any]] = {
 }
 
 
+def comment_from_detail(detail: Mapping[str, Any] | None, verdict: str) -> str:
+    """Текст для Greta: за что + пометки; иначе сам вердикт."""
+    d = detail or {}
+    parts = [str(d.get("za_chto") or "").strip(), str(d.get("pometki") or "").strip()]
+    text = "; ".join(p for p in parts if p)
+    return text or str(verdict or "")
+
+
 def payload_for_verdict(
     *,
     order_id: int,
