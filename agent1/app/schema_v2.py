@@ -118,10 +118,13 @@ CREATE TABLE IF NOT EXISTS agent_decisions (
   checklist TEXT,
   stage1 JSONB,
   stage2 JSONB,
+  agent_version TEXT,
   latency_ms INT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (day, order_id)
 );
+-- additive migration for databases created before decision versions were stored
+ALTER TABLE agent_decisions ADD COLUMN IF NOT EXISTS agent_version TEXT;
 CREATE INDEX IF NOT EXISTS idx_agent_decisions_itog ON agent_decisions(day, itog);
 
 CREATE TABLE IF NOT EXISTS human_decisions (

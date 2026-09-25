@@ -10,12 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from db import db, fetch_all, fetch_one, init_db
+from greta_reviews import detail_review, parse_day, require_read_token, short_review
 from schema_v2 import SCHEMA_V2
 from stage1_shadow import compare_human
 
@@ -706,9 +707,10 @@ def post_result(job_id: str, body: JobResultIn) -> dict[str, Any]:
             conn.execute(
                 """
                 INSERT INTO agent_decisions(
-                  day, order_id, run_id, itog, za_chto, pometki, checklist, stage1, stage2, created_at
+                  day, order_id, run_id, itog, za_chto, pometki, checklist, stage1, stage2,
+                  agent_version, created_at
                 ) VALUES (
-                  %s::date,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s
+                  %s::date,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s
                 )
                 ON CONFLICT (day, order_id) DO UPDATE SET
                   run_id=EXCLUDED.run_id,
@@ -718,6 +720,7 @@ def post_result(job_id: str, body: JobResultIn) -> dict[str, Any]:
                   checklist=EXCLUDED.checklist,
                   stage1=EXCLUDED.stage1,
                   stage2=EXCLUDED.stage2,
+                  agent_version=EXCLUDED.agent_version,
                   created_at=EXCLUDED.created_at
                 """,
                 (
@@ -732,6 +735,7 @@ def post_result(job_id: str, body: JobResultIn) -> dict[str, Any]:
                     json.dumps(detail.get("stage2"), ensure_ascii=False)
                     if detail.get("stage2") is not None
                     else None,
+                    os.environ.get("AGENT1_VERSION", "10baa44"),
                     now,
                 ),
             )
@@ -831,6 +835,75 @@ def compare() -> dict[str, Any]:
         "agreement_pct": round(100.0 * agreed / total, 1) if total else None,
         "matrix": _ser_rows(rows),
     }
+
+
+@app.get("/api/greta/reviews")
+def greta_reviews(
+    day: str,
+    limit: int = 100,
+    offset: int = 0,
+    token: str | None = Header(default=None, alias="Token"),
+) -> dict[str, Any]:
+    """Paginated decision summaries for Greta's AI review screen."""
+    require_read_token(token)
+    selected_day = parse_day(day)
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset must be non-negative")
+    with db() as conn:
+        rows = fetch_all(
+            conn,
+            "SELECT order_id, day, itog, za_chto, pometki, agent_version, created_at "
+            "FROM agent_decisions WHERE day=%s::date "
+            "ORDER BY created_at DESC, order_id DESC LIMIT %s OFFSET %s",
+            (selected_day, limit, offset),
+        )
+        total = fetch_one(
+            conn,
+            "SELECT COUNT(*) AS n FROM agent_decisions WHERE day=%s::date",
+            (selected_day,),
+        )
+    fallback_version = os.environ.get("AGENT1_VERSION", "10baa44")
+    return {
+        "day": selected_day,
+        "limit": limit,
+        "offset": offset,
+        "total": int((total or {}).get("n") or 0),
+        "items": [short_review(row, fallback_version) for row in rows],
+    }
+
+
+@app.get("/api/greta/reviews/{order_id}")
+def greta_review(
+    order_id: int,
+    token: str | None = Header(default=None, alias="Token"),
+) -> dict[str, Any]:
+    """Latest stored Agent1 decision and its evidence for one Greta order."""
+    require_read_token(token)
+    with db() as conn:
+        row = fetch_one(
+            conn,
+            "SELECT order_id, day, itog, za_chto, pometki, checklist, stage1, stage2, "
+            "agent_version, created_at FROM agent_decisions "
+            "WHERE order_id=%s ORDER BY created_at DESC LIMIT 1",
+            (order_id,),
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="review not found")
+        photos = fetch_all(
+            conn,
+            "SELECT p.photo_id, p.filename, p.time, p.lat, p.lon, "
+            "o.site_lat, o.site_lon FROM photos_day p "
+            "LEFT JOIN orders_day o ON o.day=p.day AND o.order_id=p.order_id "
+            "WHERE p.day=%s::date AND p.order_id=%s ORDER BY p.photo_id",
+            (row["day"], order_id),
+        )
+    return detail_review(
+        row,
+        photos,
+        os.environ.get("AGENT1_VERSION", "10baa44"),
+    )
 
 
 @app.get("/", response_model=None)
